@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amyloscope"
+version = "0.1.0"
+description = "Consensus meta-scoring, domain mapping and visualisation of amyloidogenicity predictions"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Xenia Sukhanova" }]
+keywords = [
+    "amyloid",
+    "aggregation",
+    "bioinformatics",
+    "consensus",
+    "protein",
+    "structural-biology",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib>=3.7", "seaborn>=0.12"]
+docs = ["mkdocs>=1.5", "mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.4",
+    "amyloscope[viz]",
+]
+
+[project.scripts]
+amyloscope = "amyloscope.cli:main"
+
+[project.urls]
+Documentation = "https://github.com/xenia/amyloscope"
+Source = "https://github.com/xenia/amyloscope"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/amyloscope"]
+
+[tool.ruff]
+line-length = 90
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
