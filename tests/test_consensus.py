@@ -9,6 +9,8 @@ working end-to-end run.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -216,3 +218,68 @@ consensus:
     assert cfg.protein_ids == ["P"]
     assert cfg.tool_names == ["T"]
     assert cfg.consensus.tiers[0].min_fraction == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# Local-build adapters (ArchCandy / CrossBeta standalone formats)
+#
+# Regression-tested against genuine standalone outputs for yeast GAPDH (TDH3),
+# checked in under tests/data/.
+# --------------------------------------------------------------------------- #
+
+_DATA = Path(__file__).parent / "data"
+
+
+def test_local_adapters_registered():
+    for key in ("archcandy_local", "crossbeta_local"):
+        assert callable(get_adapter(key))
+
+
+def test_archcandy_local_expands_candidates_with_max_score():
+    df = get_adapter("archcandy_local")(_DATA / "archcandy_local_GAPDH.csv")
+    assert list(df.columns) == ["Number", "Residue", "Score"]
+    # The standalone GAPDH run's top candidate is the 0.686 arch at 37-68.
+    assert abs(df["Score"].max() - 0.686) < 1e-6
+    assert df.loc[df["Score"].idxmax(), "Number"] == 37
+    # 'present' marks every covered residue; 'above 0.560' keeps only the two
+    # high-confidence arches (Ahmed et al. 2015 amyloidogenicity threshold).
+    present = call_regions(df, DetectionStrategy(method="present"), min_length=5)
+    assert (2, 72) in present  # the dominant N-terminal cluster
+    high = call_regions(
+        df,
+        DetectionStrategy(method="above", column="Score", threshold=0.560),
+        min_length=5,
+    )
+    assert high == [(17, 34), (37, 68)]
+
+
+def test_crossbeta_local_flags_called_regions():
+    df = get_adapter("crossbeta_local")(_DATA / "crossbeta_local_GAPDH.csv")
+    assert {"Number", "Residue", "Score", "in_AR"}.issubset(df.columns)
+    assert len(df) == 332
+    assert df["Residue"].iloc[0] == "M"  # GAPDH starts MGKVK...
+    # Flagging in_AR must reproduce CrossBeta's own AR_position call exactly.
+    regions = call_regions(
+        df,
+        DetectionStrategy(method="flag", column="in_AR", flag_true_values=[True]),
+        min_length=5,
+    )
+    assert regions == [(1, 73), (265, 332)]
+
+
+def test_crossbeta_local_score_threshold_differs_from_called_regions():
+    # CrossBeta's region boundaries are not a fixed cut on the raw score, so an
+    # 'above 0.5' mask must NOT coincide with the in_AR call (residues astride a
+    # boundary can both exceed 0.5). This guards the rationale for emitting both.
+    df = get_adapter("crossbeta_local")(_DATA / "crossbeta_local_GAPDH.csv")
+    by_flag = call_regions(
+        df,
+        DetectionStrategy(method="flag", column="in_AR", flag_true_values=[True]),
+        min_length=5,
+    )
+    by_score = call_regions(
+        df,
+        DetectionStrategy(method="above", column="Score", threshold=0.5),
+        min_length=5,
+    )
+    assert by_flag != by_score

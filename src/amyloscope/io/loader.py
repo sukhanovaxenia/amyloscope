@@ -85,7 +85,7 @@ def load_dataset(config: PipelineConfig) -> Dataset:
             path = tool.path_for(spec.id)
             try:
                 parser = get_adapter(tool.adapter)
-                pt.tracks[tool.name] = parser(path)
+                pt.tracks[tool.name] = parser(path, spec.sequence)
             except (AdapterError, FileNotFoundError, OSError, ValueError) as exc:
                 pt.failures[tool.name] = f"{type(exc).__name__}: {exc}"
                 warnings.warn(

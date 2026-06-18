@@ -273,6 +273,7 @@ class ConsensusConfig:
 DEFAULT_DOMAIN_PALETTE: dict[str, str] = {
     "rna_binding": "#4292C6",
     "dna_binding": "#4292C6",
+    "cofactor_binding": "#DF65B0",
     "structured_core": "#41AB5D",
     "catalytic": "#41AB5D",
     "disordered": "#FEC44F",

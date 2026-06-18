@@ -86,7 +86,66 @@ those with `above` would invert the biology and flag the least aggregation-prone
 residues. The renderer is aware of this too: tracks scored with `below` are
 drawn with an inverted y-axis so that "up" always means "more aggregation-prone".
 
-## `consensus`
+### Bundled adapters
+
+Run `amyloscope adapters` for the live list. The built-ins, with the detection
+strategy each is designed for:
+
+| `adapter`         | Native format                              | Recommended detection                                  |
+| ----------------- | ------------------------------------------ | ------------------------------------------------------ |
+| `aggrescan`       | per-residue CSV, `Prediction` in hotspots  | `notnull` on `Prediction`                              |
+| `appnn`           | per-residue TSV with `is_hotspot`          | `flag` on `is_hotspot`                                 |
+| `foldamyloid`     | per-residue CSV with `Fold` flag           | `flag` on `Fold` (`["f"]`)                             |
+| `pasta2`          | one free energy per line                   | `below` on `Score`                                     |
+| `waltz`           | per-residue TSV, 0 outside hits            | `nonzero` on `Score`                                   |
+| `aggreprot`       | per-residue CSV                            | `above` on `Score`                                     |
+| `crossbeta`       | web-server JSON (`AA_list`)                | `above` on `Score`                                     |
+| `crossbeta_local` | standalone `;`-CSV (per-residue + AR call) | `flag` on `in_AR` (or `above` on `Score`)              |
+| `archcandy`       | web-server region CSV                      | `present`                                              |
+| `archcandy_local` | standalone candidate CSV (scored)          | `above` on `Score` (≥0.560) or `present`               |
+
+The two `_local` adapters exist because the ArchCandy and CrossBeta public web
+servers are intermittently offline and the standalone builds emit different
+layouts. The web adapters are kept for historical files.
+
+**`archcandy_local`** parses the standalone candidate list
+(`Number, Diagram, Score, Arc_type, Position`; UTF-8 BOM; zero-padded
+`start-stop` positions), expands each candidate to per-residue rows, and keeps
+the maximum overlapping score per residue. Because every candidate carries a
+score — unlike the web output — you can apply ArchCandy's amyloidogenicity
+threshold directly:
+
+```yaml
+- name: ArchCandy
+  adapter: archcandy_local
+  path: data/archcandy/{protein}.csv
+  detection: {method: above, column: Score, threshold: 0.560}   # Ahmed et al. 2015
+  # detection: {method: present}                                 # web-server parity
+```
+
+**`crossbeta_local`** parses the standalone `;`-delimited record, reading the
+Python-literal `Amino_acids_score` (per-residue `{residue: score}` dicts) and
+`AR_position` (the tool's own `[start, stop]` aggregation regions). It emits the
+raw per-residue `Score` plus a boolean `in_AR` flag. CrossBeta's region
+boundaries are *not* a fixed cut on the raw score — adjacent residues astride a
+boundary can both exceed 0.5 — so flagging `in_AR` honours the tool's own call,
+which is the faithful APR signal for consensus:
+
+```yaml
+- name: CrossBeta
+  adapter: crossbeta_local
+  path: data/crossbeta/{protein}.csv
+  detection: {method: flag, column: in_AR, flag_true_values: [true]}  # CrossBeta's call
+  # detection: {method: above, column: Score, threshold: 0.5}         # custom per-residue cut
+```
+
+!!! note "ArchCandy positions past the C-terminus"
+    Standalone ArchCandy can report a terminal arch ending one residue past the
+    sequence (a position of 333 for a 332-residue protein). Set the protein
+    `length` explicitly so the positional statistics use the true length;
+    the stray residue is otherwise harmless.
+
+
 
 Governs how per-tool APRs are reconciled across the panel.
 
