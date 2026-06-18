@@ -44,8 +44,8 @@ dev = [
 amyloscope = "amyloscope.cli:main"
 
 [project.urls]
-Documentation = "https://github.com/xenia/amyloscope"
-Source = "https://github.com/xenia/amyloscope"
+Documentation = "https://github.com/sukhanovaxenia/amyloscope"
+Source = "https://github.com/sukhanovaxenia/amyloscope"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/amyloscope"]
