@@ -307,3 +307,47 @@ def parse_crossbeta_local(path: Path, sequence: str) -> pd.DataFrame:
         {"Number": numbers, "Residue": residues, "Score": scores, "in_AR": in_ar}
     )
     return _finalise(df, path)
+
+@register_adapter("tango")
+def parse_tango(path: Path, sequence: str) -> pd.DataFrame:
+    """TANGO per-residue output (https://tango.crg.es/products#tango).
+ 
+    TANGO reports, per residue, the percentage population of each conformational
+    state — ``Beta`` (intramolecular beta), ``Turn``, ``Helix`` — plus the
+    cross-beta ``Aggregation`` propensity and its concentration-stabilised
+    variant (``Conc-Stab_Aggregation``). The file is tab-separated with
+    zero-padded residue indices and space-padded fields.
+ 
+    The aggregation-relevant signal is the ``Aggregation`` column, which becomes
+    ``Score``; the concentration-stabilised aggregation and the beta-structure
+    column are preserved as ``Aggregation_conc`` and ``Beta`` for alternative
+    detection targets.
+ 
+    Detection: ``above`` on ``Score`` with a 5% threshold. Combined with the
+    default ``min_region_length`` of 5, this reproduces TANGO's standard
+    aggregation-nucleating-region criterion — at least five consecutive residues
+    each scoring above 5% (Fernandez-Escamilla et al., 2004, *Nat. Biotechnol.*).
+    """
+    raw = pd.read_csv(path, sep="\t", skipinitialspace=True)
+    raw.columns = [str(c).strip() for c in raw.columns]
+    required = {"res", "aa", "Aggregation"}
+    missing = required - set(raw.columns)
+    if missing:
+        raise AdapterError(
+            f"{path}: TANGO output missing columns {sorted(missing)} "
+            f"(have {list(raw.columns)})"
+        )
+    out = pd.DataFrame(
+        {
+            "Number": raw["res"],
+            "Residue": raw["aa"],
+            "Score": pd.to_numeric(raw["Aggregation"], errors="coerce"),
+        }
+    )
+    if "Conc-Stab_Aggregation" in raw.columns:
+        out["Aggregation_conc"] = pd.to_numeric(
+            raw["Conc-Stab_Aggregation"], errors="coerce"
+        )
+    if "Beta" in raw.columns:
+        out["Beta"] = pd.to_numeric(raw["Beta"], errors="coerce")
+    return _finalise(out, path)
