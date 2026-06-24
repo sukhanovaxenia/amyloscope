@@ -1,0 +1,53 @@
+# amyloscope in-silico mutagenesis example
+# ----------------------------------------
+# Designs directed variants of human GAPDH for downstream amyloidogenicity and
+# condensate prediction. Targets are taken from a prior consensus run (the
+# closed loop), augmented with an explicit region and a single position.
+#
+# Run from the repo root:
+#   amyloscope mutate examples/mutagenesis/config.yaml
+#
+# Then score examples/mutagenesis/output/gapdh_mutants.fasta with the external
+# predictor panel, post-process with `amyloscope run`, and compare:
+#   amyloscope mutate-compare WT_consensus.tsv MUTANT_consensus.tsv -p GAPDH
+
+name: gapdh
+output_dir: examples/mutagenesis/output
+
+sequence:
+  id: GAPDH
+  fasta: gapdh.fasta
+
+# Targets are the union of every source below.
+targets:
+  consensus_tsv: examples/mutagenesis/gapdh_consensus_regions.tsv
+  consensus_protein: GAPDH          # restrict the TSV to this id
+  consensus_min_tier: strong        # use 'strong' and stronger regions
+  regions: [[40, 49]]               # an extra explicit window (the 42-47 nucleus + flanks)
+  positions: [130]                  # a single high-load position
+  scan_whole_sequence: false
+
+# Both grammars; the engine scores amyloid and condensate independently.
+modes: [amyloid, condensate]
+
+# All four arms: pro-aggregation, anti-aggregation, conservative controls, and
+# truncation controls.
+vectors: [activating, inhibiting, neutral, nonsense]
+
+mutation:
+  orders: [1, 2]                    # single and double mutants
+  top_k_per_position: 2             # substitutions kept per position per vector
+  top_k_positions: 10               # leverage-ranked positions for double mutants
+  max_per_order: 40                 # cap per (mode, vector, order)
+  max_total: 600
+  protected_positions: [152, 156]   # catalytic-cysteine region, left untouched
+  truncate_at: region_start         # nonsense variants ablate from each region's start
+
+# Scoring weights (Chiti-Dobson-style linear model); all optional.
+weights:
+  hydrophobicity: 1.0
+  beta: 1.0
+  charge_penalty: 0.7
+  breaker_penalty: 1.2
+  window: 7
+  flank: 3

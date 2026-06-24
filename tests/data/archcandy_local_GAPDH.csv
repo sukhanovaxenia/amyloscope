@@ -1,0 +1,34 @@
+﻿Number,Diagram,Score,Arc_type,Position
+1,I R V R A / \/ \/ \/ \/ \ R G L T A F \ G G V V V G \ /\ /\ /\ /\ / F N G K K,0.407,BEPL,02-23
+2,I R V R A / \/ \/ \/ \/ \ R G L T A F / G \/ \ G V V V G \ /\ /\ /\ /\ / F N G K K,0.407,GBPL,02-23
+3,K D V I / \/ \/ \/ \ G V I A N / S \/ \ F A T L \ /\ /\ /\ / N A R V,0.564,GBPL,17-34
+4,I A N / \/ \/ \ D V I D \ V / K N A R \ / \ /\ / G-S F A,0.42,6 Res Arc 1,20-35
+5,D F D N M Y / \/ \/ \/ \/ \/ \ P I L Y V M N A I V G N A \ /\ /\ /\ /\ /\ / I V D K S F,0.519,PPL,22-46
+6,K H T K E G L / \/ \/ \/ \/ \/ \/ \ G F G V A N K V | H \ T / S Y F Y M N D F \ /\ /\ /\ /\ /\ /\ / D Q M V Y L I,0.686,6 Res Arc 2,37-68
+7,H K H T K E / \/ \/ \/ \/ \/ \ T G F G V A N \ S / D Q M V Y L I \ /\ /\ /\ /\ /\ / Y F Y M N D,0.502,5 Res Arc,38-64
+8,H K H T K / \/ \/ \/ \/ \ T G F G V A / S \/ \ Y F Y M N \ /\ /\ /\ /\ / D Q M V Y,0.479,GBPL,41-62
+9,K H T K E / \/ \/ \/ \/ \ G F G V A N | H S Y F Y M \ /\ /\ /\ /\ / T D Q M V,0.673,GBEB,43-64
+10,K H T K E / \/ \/ \/ \/ \ G F G V A N / H \/ \ S Y F Y M \ /\ /\ /\ /\ / T D Q M V,0.673,GBPL,43-64
+11,T K E G L I G / \/ \/ \/ \/ \/ \/ \ V A N K V N N G F G T D Q M V \ /\ /\ /\ /\ /\ /\ / H K H S Y F Y,0.462,PPL,44-72
+12,H T K E / \/ \/ \/ \ F G V A N | K \ G / H S Y F Y \ /\ /\ /\ / T D Q M,0.555,6 Res Arc 2,45-64
+13,L I G / \/ \/ \ V N N K N A V \ /\ /\ / G E K,0.411,PPL,60-72
+14,A A L G A R / \/ \/ \/ \/ \/ \ G H Q G K V K M T V T E V \ /\ /\ /\ /\ /\ / E T F G S V,0.428,PPL,95-119
+15,G A R I S / \/ \/ \/ \/ \ Q G K V I A \ L / H A E T F G \ / \ /\ /\ /\ / A-G K M T V,0.471,6 Res Arc 1,100-123
+16,G A R I S / \/ \/ \/ \/ \ Q G K V I A | L \ H / A A E T F G \ /\ /\ /\ /\ / G K M T V,0.471,6 Res Arc 2,100-123
+17,R I S / \/ \/ \ K V I A / A \/ \ G L A \ /\ /\ / G Q H,0.416,GBPL,110-123
+18,A C T C / \/ \/ \/ \ N S T N L / S \/ \ I L N Y \ /\ /\ /\ / I K S D,0.439,GBPL,140-157
+19,C T C / \/ \/ \ S T N L / A \/ \ S I L \ /\ /\ / N I K,0.408,GBPL,144-157
+20,G V G / \/ \/ \ F I E L \ N / D I K L \ /\ /\ / H V A,0.451,5 Res Arc,160-174
+21,G M T H I / \/ \/ \/ \/ \ E L T V A T / V \/ \ G N H V A \ /\ /\ /\ /\ / I F D I K,0.464,GBPL,161-182
+22,T V A T T K / \/ \/ \/ \/ \/ \ M T H I A Q T \ L / G V G N H V A \ /\ /\ /\ /\ /\ / E I F D I K,0.418,5 Res Arc,161-187
+23,M T H I A / \/ \/ \/ \/ \ L T V A T T \ G / E G N H V A \ / \ /\ /\ /\ / V-I F D I K,0.4,6 Res Arc 1,161-184
+24,M T H I A / \/ \/ \/ \/ \ L T V A T T \ G V G N H V \ /\ /\ /\ /\ / E I F D I,0.402,BEPL,163-184
+25,M T H I A / \/ \/ \/ \/ \ L T V A T T / G \/ \ V G N H V \ /\ /\ /\ /\ / E I F D I,0.402,GBPL,163-184
+26,I A Q T / \/ \/ \/ \ A T T K V \ H / V T L E I \ /\ /\ /\ / T M G V,0.427,5 Res Arc,170-188
+27,K I G T H / \/ \/ \/ \/ \ L G L Y E Q \ P / G S Q V K I \ /\ /\ /\ /\ / E A K V K,0.54,5 Res Arc,258-280
+28,S T D G G / \/ \/ \/ \/ \ H S F A A I / T \/ \ S F S V Q \ /\ /\ /\ /\ / D N D S V,0.435,GBPL,280-301
+29,A I L D F K I W / \/ \/ \/ \/ \/ \/ \/ \ G G A N H V L S Y \ A / D T S T S F S V Q \ /\ /\ /\ /\ /\ /\ /\ / F S H D N D S V,0.412,5 Res Arc,280-314
+30,I W D E G S / \/ \/ \/ \/ \/ \ S Y N F Y N L V H N A G G \ /\ /\ /\ /\ /\ / K F D L I A,0.403,PPL,298-322
+31,Y N V D M H / \/ \/ \/ \/ \/ \ G S R V L A M | F \ E / N Y S L V H N \ /\ /\ /\ /\ /\ / D W I K F D,0.49,6 Res Arc 2,304-331
+32,D E G S R / \/ \/ \/ \/ \ N F Y N V Y S L V H N \ /\ /\ /\ /\ / W I K F D,0.445,PPL,304-324
+33,V D M H A / \/ \/ \/ \/ \ R V L A M S | N \ S / Y F N Y S L \ /\ /\ /\ /\ / G E D W I,0.432,6 Res Arc 2,310-333

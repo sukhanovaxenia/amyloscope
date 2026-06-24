@@ -283,3 +283,21 @@ def test_crossbeta_local_score_threshold_differs_from_called_regions():
         min_length=5,
     )
     assert by_flag != by_score
+
+
+def test_tango_adapter_reproduces_nucleating_regions():
+    df = get_adapter("tango")(_DATA / "tango_GAPDH.txt")
+    assert {"Number", "Residue", "Score", "Aggregation_conc", "Beta"}.issubset(
+        df.columns
+    )
+    assert len(df) == 335
+    assert df["Residue"].iloc[0] == "M"  # human GAPDH starts MGKVK...
+    assert abs(df["Score"].max() - 66.945) < 1e-3
+    # 'above 5%' with the default 5-residue floor is TANGO's standard
+    # aggregation-nucleating-region criterion (Fernandez-Escamilla et al. 2004).
+    apr = call_regions(
+        df,
+        DetectionStrategy(method="above", column="Score", threshold=5.0),
+        min_length=5,
+    )
+    assert apr == [(42, 47), (74, 78), (101, 105), (130, 135), (310, 314)]

@@ -3,6 +3,8 @@
     amyloscope run config.yaml [-o OUTPUT_DIR] [--no-figures]
     amyloscope validate config.yaml
     amyloscope adapters
+    amyloscope mutate mutate.yaml
+    amyloscope mutate-compare WT_consensus.tsv MUT_consensus.tsv [-p PROTEIN]
 """
 
 from __future__ import annotations
@@ -48,6 +50,38 @@ def _cmd_adapters(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mutate(args: argparse.Namespace) -> int:
+    from collections import Counter
+
+    from .mutate import load_mutate_config
+    from .mutate import run as run_mutate
+
+    try:
+        cfg = load_mutate_config(args.config)
+    except ValueError as exc:
+        print(f"INVALID: {exc}", file=sys.stderr)
+        return 1
+    artifacts = run_mutate(cfg)
+    print(f"Panel: {len(cfg.proteins)} protein(s), "
+          f"{len(artifacts.records)} variants total")
+    per_protein = Counter(r.protein for r in artifacts.records)
+    for job in cfg.proteins:
+        pid = job.sequence.id
+        print(f"  {pid} ({len(job.sequence.sequence)} aa): "
+              f"{per_protein[pid]} variants")
+    for path in artifacts.written_files:
+        print(f"  {path}")
+    return 0
+
+
+def _cmd_mutate_compare(args: argparse.Namespace) -> int:
+    from .mutate import compare_consensus
+
+    diff = compare_consensus(args.wildtype, args.mutant, protein=args.protein)
+    print(diff.report())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="amyloscope", description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -65,6 +99,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ad = sub.add_parser("adapters", help="list registered predictor adapters")
     p_ad.set_defaults(func=_cmd_adapters)
+
+    p_mut = sub.add_parser("mutate", help="generate directed mutant sequences")
+    p_mut.add_argument("config")
+    p_mut.set_defaults(func=_cmd_mutate)
+
+    p_cmp = sub.add_parser(
+        "mutate-compare", help="diff wild-type vs mutant consensus_regions.tsv"
+    )
+    p_cmp.add_argument("wildtype", help="wild-type consensus_regions.tsv")
+    p_cmp.add_argument("mutant", help="mutant consensus_regions.tsv")
+    p_cmp.add_argument("-p", "--protein", help="restrict to one protein id")
+    p_cmp.set_defaults(func=_cmd_mutate_compare)
 
     return parser
 

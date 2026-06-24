@@ -30,6 +30,7 @@ nav:
   - Overview: index.md
   - Configuration: configuration.md
   - Adding a predictor: adding-a-predictor.md
+  - Mutagenesis: mutagenesis.md
   - API reference: api.md
 
 markdown_extensions:

@@ -1,0 +1,58 @@
+# amyloscope in-silico mutagenesis — multi-protein panel example
+# ---------------------------------------------------------------
+# Mutates two proteins in a single run: human GAPDH (335 aa) and the amyloid-beta
+# 1-42 peptide. Each protein draws its targets from a SHARED consensus table; the
+# consensus filter defaults to each protein's own id, so one file serves the
+# whole panel. Shared settings (grammars, vectors, limits, weights) apply to all
+# proteins; targets and protected positions are per-protein.
+#
+# Run from the repo root:
+#   amyloscope mutate examples/mutagenesis/panel.yaml
+#
+# Produces, in examples/mutagenesis/panel_output/:
+#   GAPDH_mutants.fasta     GAPDH_manifest.tsv
+#   Abeta42_mutants.fasta   Abeta42_manifest.tsv
+#   panel_manifest.tsv      (combined, protein-labelled)
+
+name: panel
+output_dir: examples/mutagenesis/panel_output
+
+# Shared across the panel.
+modes: [amyloid, condensate]
+vectors: [activating, inhibiting, neutral, nonsense]
+mutation:
+  orders: [1, 2]
+  top_k_per_position: 2
+  top_k_positions: 8
+  max_per_order: 30
+  max_total: 400          # per protein
+  truncate_at: region_start
+
+weights:
+  hydrophobicity: 1.0
+  beta: 1.0
+  charge_penalty: 0.7
+  breaker_penalty: 1.2
+  window: 7
+  flank: 3
+
+# Per-protein: sequence, targets, and protected positions.
+proteins:
+  - sequence:
+      id: GAPDH
+      fasta: gapdh.fasta
+    targets:
+      consensus_tsv: examples/mutagenesis/panel_consensus_regions.tsv
+      # consensus_protein defaults to "GAPDH"
+      consensus_min_tier: strong
+      regions: [[40, 49]]
+      positions: [130]
+    protected_positions: [152, 156]   # catalytic-cysteine region
+
+  - sequence:
+      id: Abeta42
+      fasta: abeta42.fasta
+    targets:
+      consensus_tsv: examples/mutagenesis/panel_consensus_regions.tsv
+      # consensus_protein defaults to "Abeta42"
+      positions: [22]                  # the Glu22 Dutch/Arctic hotspot

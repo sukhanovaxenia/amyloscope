@@ -82,6 +82,30 @@ result = compute_consensus(dataset)  # fractional consensus regions per protein
 amyloscope run       CONFIG.yaml      # load, run, write all artifacts
 amyloscope validate  CONFIG.yaml      # parse and validate the config, report panel size
 amyloscope adapters                   # list registered predictor adapters
+amyloscope mutate    MUTATE.yaml      # generate directed mutant sequences (see below)
+amyloscope mutate-compare WT.tsv MUT.tsv [-p ID]   # diff wild-type vs mutant consensus
+```
+
+## In-silico directed mutagenesis
+
+The `mutate` subpackage closes the loop the consensus layer opens: it designs
+sequence variants that should **raise** (`activating`), **lower** (`inhibiting`),
+or **leave unchanged** (`neutral`, plus `nonsense`/truncation) the aggregation or
+phase-separation propensity of a protein, for downstream scoring by the predictor
+panel. Substitutions are scored against the Chiti–Dobson axes — hydrophobicity,
+β-propensity, charge, and the proline/glycine β-breakers — for the amyloid
+grammar, or aromatic/cation-π sticker valence for the condensate (LLPS) grammar;
+both are selectable per run. Targets are the union of consensus APRs (the closed
+loop), explicit regions/positions, and a whole-sequence scan. The rule engine
+*proposes* candidates; the predictor panel and wet-lab *adjudicate* them. A run
+can mutate **multiple proteins at once** — a `proteins:` list, each with its own
+sequence and targets, sharing the grammars, vectors and limits, with per-protein
+FASTA/manifest outputs plus a combined manifest. See the
+[mutagenesis guide](docs/mutagenesis.md) and `examples/mutagenesis/`.
+
+```bash
+amyloscope mutate examples/mutagenesis/config.yaml   # single protein -> FASTA + ranked manifest
+amyloscope mutate examples/mutagenesis/panel.yaml    # GAPDH + Abeta42 panel
 ```
 
 ## What it produces
@@ -144,6 +168,19 @@ hardcoded. The available primitives:
 The `below` primitive is not cosmetic: free-energy scores invert the usual
 sense, where more-negative values mark more-stable cross-beta pairing, so an
 `above`-only design would silently miscall every energy-based predictor.
+
+Eleven adapters ship built in (run `amyloscope adapters` to list them),
+covering Aggrescan, APPNN, FoldAmyloid, PASTA 2.0, Waltz, AggreProt, TANGO, and
+CrossBeta, plus standalone-build variants — `archcandy_local` and
+`crossbeta_local` — for the ArchCandy and CrossBeta tools, whose public web
+servers are intermittently offline; the local builds emit different layouts that
+these adapters parse natively. `crossbeta_local` exposes both the raw
+per-residue score and the tool's own called regions (an `in_AR` flag),
+`archcandy_local` preserves each candidate's score so ArchCandy's
+amyloidogenicity threshold can be applied directly, and `tango` maps the
+`Aggregation` column to a 5%-over-five-residues nucleating-region rule. See
+[`docs/configuration.md`](docs/configuration.md) for the per-adapter detection
+recommendations.
 
 ### The consensus model
 

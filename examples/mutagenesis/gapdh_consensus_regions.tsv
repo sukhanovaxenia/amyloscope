@@ -1,0 +1,6 @@
+Protein	Class	Region	Tools	Length	n_tools
+GAPDH:42-47	unanimous	YMVYMF	Aggrescan,TANGO,PASTA2,Waltz	6	6
+GAPDH:74-78	strong	ITIFQ	Aggrescan,TANGO,PASTA2,Waltz	5	6
+GAPDH:101-105	strong	VFTTM	Aggrescan,TANGO,PASTA2,Waltz	5	6
+GAPDH:130-135	unanimous	MFVMGV	Aggrescan,TANGO,PASTA2,Waltz	6	6
+GAPDH:310-314	strong	LISWY	Aggrescan,TANGO,PASTA2,Waltz	5	6
