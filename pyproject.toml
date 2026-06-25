@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "amyloscope"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Consensus meta-scoring, domain mapping and visualisation of amyloidogenicity predictions"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,6 +46,9 @@ amyloscope = "amyloscope.cli:main"
 [project.urls]
 Documentation = "https://github.com/xenia/amyloscope"
 Source = "https://github.com/xenia/amyloscope"
+
+[tool.hatch.version]
+path = "src/amyloscope/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/amyloscope"]

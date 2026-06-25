@@ -16,10 +16,6 @@ from .analysis.statistics import compute_statistics, format_report
 from .config import PipelineConfig, load_config
 from .core.consensus import ConsensusResult, compute_consensus
 from .io.loader import Dataset, load_dataset
-from .viz import consensus as viz_consensus
-from .viz import domains as viz_domains
-from .viz import style as viz_style
-from .viz import tracks as viz_tracks
 
 
 @dataclass
@@ -72,7 +68,15 @@ def run_from_file(
 
 
 def _render_figures(dataset, result, out_dir: Path) -> list[str]:
+    # Imported here, not at module scope, so `import amyloscope` and the
+    # sequence-only modules (e.g. amyloscope.mutate) work without matplotlib;
+    # the plotting stack is only needed when figures are actually rendered.
     import matplotlib.pyplot as plt
+
+    from .viz import consensus as viz_consensus
+    from .viz import domains as viz_domains
+    from .viz import style as viz_style
+    from .viz import tracks as viz_tracks
 
     config = dataset.config
     written: list[str] = []

@@ -1,0 +1,126 @@
+name: release
+
+# Cut a release by pushing a version tag:
+#   git tag -a v0.2.0 -m "amyloscope 0.2.0"
+#   git push origin v0.2.0
+#
+# This runs the test matrix, builds the sdist + wheel in a clean runner, checks
+# the tag matches the package version, and publishes a GitHub Release with the
+# artifacts attached and notes taken from CHANGELOG.md. No local build needed.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package and dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src/ tests/ examples/
+      - name: Test
+        run: pytest -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Verify wheel imports without optional extras and matches the tag
+        run: |
+          python -m venv /tmp/check
+          /tmp/check/bin/pip install dist/*.whl
+          PKG_VERSION=$(/tmp/check/bin/python -c "import amyloscope; print(amyloscope.__version__)")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "package=$PKG_VERSION tag=$TAG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package version $PKG_VERSION"
+            exit 1
+          fi
+          /tmp/check/bin/python -c "from amyloscope.mutate import run; print('mutate import OK')"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create the release
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Extract this version's changelog section
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VER" '
+            $0 ~ "^## \\[" ver "\\]" {flag=1; next}
+            flag && $0 ~ "^## \\[" {flag=0}
+            flag {print}
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "Release ${GITHUB_REF_NAME}." > RELEASE_NOTES.md
+          fi
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: amyloscope ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: dist/*
+          fail_on_unmatched_files: true
+
+  # ---------------------------------------------------------------------------
+  # Optional: publish to PyPI on tag via Trusted Publishing (no API token).
+  # To enable:
+  #   1. On PyPI: Project -> Publishing -> add a GitHub Actions trusted publisher
+  #      (owner = your GitHub user/org, repo = amyloscope, workflow = release.yml,
+  #       environment = pypi).
+  #   2. In this repo: Settings -> Environments -> create an environment named
+  #      "pypi".
+  #   3. Uncomment the job below.
+  #
+  # pypi-publish:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   environment: pypi
+  #   permissions:
+  #     id-token: write   # required for Trusted Publishing (OIDC)
+  #   steps:
+  #     - name: Download build artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: dist
+  #         path: dist
+  #     - name: Publish to PyPI
+  #       uses: pypa/gh-action-pypi-publish@release/v1
