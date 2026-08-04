@@ -80,7 +80,7 @@ def _finalise(df: pd.DataFrame, source: Path) -> pd.DataFrame:
 @register_adapter("aggrescan")
 def parse_aggrescan(path: Path, sequence: str) -> pd.DataFrame:
     """Aggrescan per-residue CSV. APR rows carry a non-null ``Prediction``."""
-    df = pd.read_csv(path, sep=r",|;", header=1, engine="python")
+    df = pd.read_csv(path, sep=r",", header=0, engine="python", encoding='latin-1')
     df.columns = ["Number", "Residue", "Score", "HSA", "NHSA", "a4vAHS", "Prediction"]
     return _finalise(df, path)
 
@@ -97,7 +97,7 @@ def parse_appnn(path: Path, sequence: str) -> pd.DataFrame:
 @register_adapter("foldamyloid")
 def parse_foldamyloid(path: Path, sequence: str) -> pd.DataFrame:
     """FoldAmyloid CSV. APR residues marked ``Fold == 'f'``."""
-    df = pd.read_csv(path, sep=r"\t", header=0, engine="python", comment="-")
+    df = pd.read_csv(path, sep=r"\t|,", header=0, engine="python", comment="-")
     df = df.apply(lambda col: col.replace(r"\s+", "", regex=True))
     df.columns = ["Number", "Residue", "Fold", "Score"]
     df["Fold"] = df["Fold"].astype(str).str.strip()
@@ -272,6 +272,7 @@ def parse_crossbeta_local(path: Path, sequence: str) -> pd.DataFrame:
     custom per-residue cut.
     """
     raw = pd.read_csv(path, sep=";", encoding="utf-8-sig")
+    raw.columns = raw.columns.str.replace(",", "")
     needed = {"Amino_acids_score", "AR_position"}
     missing = needed - set(raw.columns)
     if missing:

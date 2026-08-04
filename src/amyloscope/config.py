@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import hashlib
 import yaml
+import csv
 
 # --------------------------------------------------------------------------- #
 # Per-tool APR detection strategy
@@ -32,7 +35,68 @@ import yaml
 #: adapter declares a default strategy; users may override the threshold.
 VALID_METHODS = {"above", "below", "flag", "notnull", "nonzero", "present"}
 
-
+@dataclass
+class MeasurementSet:
+    """One experimental value per protein, to be correlated with the consensus.
+ 
+    Values may be given inline or read from a delimited file produced by
+    whatever assay pipeline generated them. The file route is preferred for
+    anything that gets regenerated: an inline number is a snapshot with no way
+    to tell whether it is still current, and a measurement that has moved
+    between analysis runs will otherwise be plotted long after it stopped being
+    true.
+ 
+    Parameters
+    ----------
+    values
+        ``protein_id -> value``, resolved from either route by the time
+        validation runs.
+    label
+        Axis label including units.
+    source
+        Free text naming the assay.
+    origin
+        Provenance of a file-backed set: absolute path, modification time and
+        content hash, filled in by the loader. ``None`` for inline values.
+    """
+ 
+    values: dict[str, float] = field(default_factory=dict)
+    label: str = "Measured value"
+    source: str | None = None
+    origin: dict[str, str] | None = None
+ 
+    MIN_PROTEINS = 3
+ 
+    def describe(self) -> str:
+        """One-line provenance string for the statistics report."""
+        if not self.origin:
+            return f"{self.label} (inline values)"
+        return (f"{self.label} from {self.origin['path']} "
+                f"(modified {self.origin['mtime']}, "
+                f"sha256 {self.origin['sha256'][:12]})")
+ 
+    def validate(self, protein_ids: list[str]) -> None:
+        if not self.values:
+            return
+        known = set(protein_ids)
+        unknown = sorted(set(self.values) - known)
+        if unknown:
+            raise ConfigError(
+                f"measurements reference unknown protein id(s) {unknown}; "
+                f"configured ids are {sorted(known)}. If the source table is "
+                f"keyed by display name, map them with measurements.id_map."
+            )
+        for pid, val in self.values.items():
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
+                raise ConfigError(
+                    f"measurements['{pid}'] must be a number, got {val!r}"
+                )
+        if len(self.values) < self.MIN_PROTEINS:
+            raise ConfigError(
+                f"measurements cover {len(self.values)} protein(s); at least "
+                f"{self.MIN_PROTEINS} are required for a rank correlation. "
+                f"Remove the block or add the missing proteins."
+            )
 @dataclass
 class DetectionStrategy:
     """How to turn one predictor's track into a per-residue APR mask.
@@ -283,20 +347,64 @@ DEFAULT_DOMAIN_PALETTE: dict[str, str] = {
     "terminal": "#756BB1",
     "conserved": "#99000D",
     "default": "#CCCCCC",
+    "связывание рнк": "#4292C6",
+    "связывание днк": "#4292C6",
+    "структурированное_ядро": "#41AB5D",
+    "каталитический": "#41AB5D",
+    "неупорядоченный": "#FEC44F",
+    "низкая_сложность": "#FEC44F",
+    "линкер": "#FEC44F",
+    "локализация": "#FB6A4A",
+    "регуляторный": "#9E9AC8",
+    "концевой": "#756BB1",
+    "консервативный": "#99000D",
+    "по умолчанию": "#CCCCCC"
+
 }
 
 
 @dataclass
 class VizConfig:
-    """Figure rendering options."""
-
     dpi: int = 300
     save_svg: bool = True
+    detailed: bool = False 
     font_family: str = "Arial"
     x_padding: int = 15
+    language: str = "en"
+    preset: str = "print"
+    scale: float | None = None
+    base_font_size: float | None = None
+    figure_scale: float | None = None
     domain_palette: dict[str, str] = field(
         default_factory=lambda: dict(DEFAULT_DOMAIN_PALETTE)
     )
+
+    _PRESETS = {
+        "print": (9.0, 1.0, 1.0),
+        "talk": (14.0, 1.3, 1.2),
+        "poster": (20.0, 1.7, 1.5),
+    }
+
+    def _preset_values(self):
+        return self._PRESETS.get(self.preset, self._PRESETS["print"])
+
+    @property
+    def resolved_base_font(self) -> float:
+        v = self.base_font_size
+        return v if v is not None else self._preset_values()[0]
+
+    @property
+    def resolved_scale(self) -> float:
+        return self.scale if self.scale is not None else self._preset_values()[1]
+
+    @property
+    def resolved_figure_scale(self) -> float:
+        v = self.figure_scale
+        return v if v is not None else self._preset_values()[2]
+
+    def figsize(self, width: float, height: float) -> tuple[float, float]:
+        fs = self.resolved_figure_scale
+        return (width * fs, height * fs)
 
 
 # --------------------------------------------------------------------------- #
@@ -318,6 +426,15 @@ class PipelineConfig:
     #: ribosome-protection narrative belongs here when relevant, rather than
     #: hardcoded into the report generator.
     hypothesis: str | None = None
+    #: Optional external measurements correlated against the consensus. Absent
+    #: by default, so every existing config loads unchanged.
+    measurements: MeasurementSet | None = None
+    #: Domain category the study was designed to test, e.g. `rna_binding`.
+    #: Reported one-sided at m = 1 because the directional claim is stated in
+    #: `hypothesis` before the analysis runs; every other category is
+    #: exploratory and Holm-corrected. Leave unset and all categories are
+    #: exploratory.
+    primary_domain_category: str | None = None
 
     # -- convenience views ------------------------------------------------- #
 
@@ -366,6 +483,15 @@ class PipelineConfig:
             seen_proteins.add(prot.id)
             prot.validate()
         self.consensus.validate()
+        if self.measurements is not None:
+            self.measurements.validate(self.protein_ids)
+        if self.primary_domain_category is not None:
+            cats = {d.category for p in self.proteins for d in p.domains}
+            if self.primary_domain_category not in cats:
+                raise ConfigError(
+                    f"primary_domain_category "
+                    f"{self.primary_domain_category!r} is not a category used "
+                    f"by any configured domain; available: {sorted(cats)}")
 
 
 class ConfigError(ValueError):
@@ -446,10 +572,189 @@ def _build_consensus(raw: dict[str, Any] | None) -> ConsensusConfig:
     )
 
 
+def _read_measurement_file(
+    path: Path,
+    id_column: str,
+    value_column: str,
+    keep_ids: list[str],
+    id_map: dict[str, str] | None = None,
+    delimiter: str | None = None,
+) -> tuple[dict[str, float], dict[str, str], list[str]]:
+    """Read ``id -> value`` from a delimited table, filtered to ``keep_ids``.
+ 
+    Returns ``(values, origin, dropped)``. ``dropped`` names the rows that fell
+    outside the protein panel, so the caller can report them; they are not an
+    error, because the assay panel legitimately differs from the prediction
+    panel.
+    """
+    if not path.exists():
+        raise ConfigError(f"measurements.from_file not found: {path}")
+    delim = delimiter or ("\\t" if path.suffix.lower() in {".tsv", ".tab"} else ",")
+    # utf-8-sig strips the BOM that spreadsheet exports prepend, which would
+    # otherwise make the first column name unmatchable.
+    with path.open("r", encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh, delimiter=delim))
+    if not rows:
+        raise ConfigError(f"measurements.from_file is empty: {path}")
+    for col in (id_column, value_column):
+        if col not in rows[0]:
+            raise ConfigError(
+                f"measurements.from_file {path}: column {col!r} not found; "
+                f"available columns are {sorted(rows[0])}"
+            )
+ 
+    id_map = id_map or {}
+    known = set(keep_ids)
+ 
+    # Check the mapping the user wrote before looking at the data it produces.
+    # A target that is not a configured protein is a typo, and catching it here
+    # names the offending line of config rather than leaving a hole in the
+    # resulting correlation.
+    bad_targets = sorted(set(id_map.values()) - known)
+    if bad_targets:
+        raise ConfigError(
+            f"measurements.id_map maps to unknown protein id(s) {bad_targets}; "
+            f"configured ids are {sorted(known)}"
+        )
+ 
+    values: dict[str, float] = {}
+    dropped: list[str] = []
+    non_numeric: list[str] = []
+    for row in rows:
+        raw_id = (row.get(id_column) or "").strip()
+        if not raw_id:
+            continue
+        pid = id_map.get(raw_id, raw_id)
+        if pid not in known:
+            dropped.append(raw_id)
+            continue
+        raw_val = (row.get(value_column) or "").strip()
+        try:
+            values[pid] = float(raw_val)
+        except ValueError:
+            non_numeric.append(raw_id)
+ 
+    if not values:
+        raise ConfigError(
+            f"measurements.from_file {path}: no row matched a configured "
+            f"protein id.\\n"
+            f"  ids in the file : {sorted({(r.get(id_column) or '').strip() for r in rows} - {''})}\\n"
+            f"  ids in the panel: {sorted(known)}\\n"
+            f"  If the file is keyed by display name, translate it with "
+            f"measurements.id_map."
+        )
+    if non_numeric:
+        print(f"  [config] measurements: {len(non_numeric)} panel row(s) with a "
+              f"non-numeric {value_column!r} skipped: {non_numeric}")
+ 
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    mtime = datetime.fromtimestamp(
+        path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds")
+    origin = {"path": str(path.resolve()), "mtime": mtime, "sha256": digest}
+    return values, origin, dropped
+
+
+def _build_measurements(
+    raw: dict[str, Any] | None, protein_ids: list[str]
+) -> MeasurementSet | None:
+    """Build a MeasurementSet from the top-level `measurements:` mapping.
+ 
+    Three accepted forms — compact (bare ``id: value``), inline (``values:``),
+    and file-backed (``from_file:``). Only the file form filters to the protein
+    panel: its rows come from another pipeline whose scope legitimately differs,
+    whereas an inline block is written by hand against this config and an id
+    outside the panel there is a mistake.
+    """
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            "measurements must be a mapping of protein id to value, not "
+            f"{type(raw).__name__}. It is data, not an on/off switch:\n"
+            "  measurements:\n"
+            "    values: {RPS2: 1.901, RPL27: 6.697}\n"
+            "    label: \"FRAP mobile fraction (%)\""
+        )
+    if "from_file" in raw and "values" in raw:
+        raise ConfigError(
+            "measurements: give either 'from_file' or 'values', not both — "
+            "otherwise which one is authoritative is undefined."
+        )
+ 
+    if "from_file" in raw:
+        values, origin, dropped = _read_measurement_file(
+            Path(raw["from_file"]),
+            id_column=raw.get("id_column", "condition"),
+            value_column=raw.get("value_column", "value"),
+            keep_ids=protein_ids,
+            id_map=raw.get("id_map"),
+            delimiter=raw.get("delimiter"),
+        )
+        if dropped:
+            # Named, not silent. The assay panel differing from the prediction
+            # panel is expected once per run; a NEW name appearing here is how a
+            # renamed condition upstream becomes visible.
+            print(f"  [config] measurements: {len(dropped)} row(s) outside the "
+                  f"protein panel dropped: {sorted(set(dropped))}")
+ 
+        # `require` guards the other direction: a condition that disappears from
+        # the assay output. eL27 has moved n = 6 -> 4 -> 3 across runs in this
+        # project; a run in which it vanishes should stop the pipeline rather
+        # than quietly yield a smaller correlation.
+        required = raw.get("require") or []
+        missing = sorted(set(required) - set(values))
+        if missing:
+            raise ConfigError(
+                f"measurements.require lists {missing}, which the source file "
+                f"does not provide. Present: {sorted(values)}. Either the assay "
+                f"run is incomplete or the requirement is out of date."
+            )
+        return MeasurementSet(
+            values=values,
+            label=raw.get("label", "Measured value"),
+            source=raw.get("source"),
+            origin=origin,
+        )
+ 
+    if "values" in raw:
+        values_raw = raw["values"] or {}
+        label = raw.get("label", "Measured value")
+        source = raw.get("source")
+    else:
+        values_raw, label, source = raw, "Measured value", None
+    return MeasurementSet(
+        values={str(k): float(v) for k, v in values_raw.items()},
+        label=label,
+        source=source,
+    )
+
+
 def _build_viz(raw: dict[str, Any] | None) -> VizConfig:
     if not raw:
         return VizConfig()
+    # if "measurements" in raw:
+    #     raise ConfigError(
+    #         "viz.measurements is no longer used. Move the measurements to the "
+    #         "top level of the config as a mapping of protein id to value, e.g.\n"
+    #         "  measurements:\n"
+    #         "    values: {RPS2: 1.901, RPL27: 6.697}\n"
+    #         '    label: "FRAP mobile fraction (%)"')
     base = VizConfig()
+    language = raw.get("language", base.language)
+    from .viz.labels import SUPPORTED_LANGUAGES
+    if language not in SUPPORTED_LANGUAGES:
+        raise ConfigError(
+            f"viz.language must be one of {list(SUPPORTED_LANGUAGES)}; got {language!r}"
+        )
+    preset = raw.get("preset", base.preset)
+    if preset not in VizConfig._PRESETS:
+        raise ConfigError(
+            f"viz.preset must be one of {sorted(VizConfig._PRESETS)}; got {preset!r}"
+        )
+    for key in ("scale", "base_font_size", "figure_scale"):
+        val = raw.get(key)
+        if val is not None and (not isinstance(val, (int, float)) or val <= 0):
+            raise ConfigError(f"viz.{key} must be a positive number; got {val!r}")
     palette = dict(DEFAULT_DOMAIN_PALETTE)
     palette.update(raw.get("domain_palette", {}))
     return VizConfig(
@@ -457,7 +762,13 @@ def _build_viz(raw: dict[str, Any] | None) -> VizConfig:
         save_svg=raw.get("save_svg", base.save_svg),
         font_family=raw.get("font_family", base.font_family),
         x_padding=raw.get("x_padding", base.x_padding),
+        language=language,
         domain_palette=palette,
+        preset=preset,
+        detailed=raw.get("detailed", base.detailed),
+        scale=raw.get("scale", base.scale),
+        base_font_size=raw.get("base_font_size", base.base_font_size),
+        figure_scale=raw.get("figure_scale", base.figure_scale),
     )
 
 
@@ -469,14 +780,19 @@ def load_config(path: str | Path) -> PipelineConfig:
     if not isinstance(raw, dict):
         raise ConfigError(f"{path}: top-level YAML must be a mapping")
 
+    proteins = [_build_protein(p) for p in raw.get("proteins", [])]
     cfg = PipelineConfig(
         name=raw.get("name", path.stem),
-        proteins=[_build_protein(p) for p in raw.get("proteins", [])],
+        proteins=proteins,
         tools=[_build_tool(t) for t in raw.get("tools", [])],
         consensus=_build_consensus(raw.get("consensus")),
         viz=_build_viz(raw.get("viz")),
         output_dir=raw.get("output_dir", "amyloscope_output"),
         hypothesis=raw.get("hypothesis"),
+        primary_domain_category=raw.get("primary_domain_category"),
+        measurements=_build_measurements(
+            raw.get("measurements"), [p.id for p in proteins]
+        ),
     )
     cfg.validate()
     return cfg

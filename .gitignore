@@ -31,3 +31,6 @@ examples/*/data/
 *.swp
 .idea/
 .vscode/
+
+# Log commits
+CHANGELOG.txt
