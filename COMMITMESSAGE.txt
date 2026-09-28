@@ -1,0 +1,201 @@
+feat(analysis): adjudicate overlapping APR tiers and panel independence
+
+Two questions the pipeline could not previously answer, plus the adapter work
+needed to feed them.
+
+The first is what to do when a moderate-tier region overlaps a narrower strong
+or unanimous one. Promoting the whole overlapping pattern to the higher tier is
+tempting and wrong: the shoulder may be real extension, or it may be the window
+width of whichever predictor is widest. Cross-Beta scores 15-residue windows, so
+it cannot resolve a nucleation core, a steric zipper or a gatekeeper, and it
+reaches into flanks that narrower models never call. The pipeline now reports
+core and extent separately and names which of the two readings the data supports.
+
+The second is whether a fractional consensus means what it says. Reading
+agreement as converging evidence is valid only while the models are
+mechanistically independent, and some published tools are built ON others.
+
+analysis/clusters.py  (new)
+
+  Clusters overlapping regions at residue resolution and reports, per cluster,
+  the extent (the called region) and the core (peak agreement inside it), never
+  a single promoted tier. The verdict comes from predictor breadth: whether the
+  narrow callers reach into the shoulder, or only the wide ones do.
+
+  measure_breadth() / classify_breadth() give the called fraction per predictor,
+  which is the discriminator. On the ribosomal panel: Cross-Beta 42.0 %,
+  Aggrescan 28.3 %, ArchCandy 27.5 %, APPNN 22.4 %, PASTA2 19.3 %, FoldAmyloid
+  16.4 %, AggreProt 14.2 %, TANGO 7.3 %, Waltz 4.4 %. Verdicts are
+  no_shoulder / extension_supported / window_artifact / ambiguous.
+
+  On the real data the answer was usually "extension supported": RPS2 80-86
+  (moderate) contains a strong IYLF core at 81-84, RPS2 126-131 (strong)
+  contains a unanimous AFVA core at 126-129, RPS2 153-163 contains a strong
+  AIILA core at 154-158 -- and in each the narrow callers (Waltz 4.4 %,
+  TANGO 7.3 %, AggreProt 14.2 %) are present in the shoulders, so the widening
+  is not Cross-Beta's window alone.
+
+analysis/independence.py  (new)
+
+  Declares the derivations (amyloid_predict -> TANGO + WALTZ; ST-ARCH ->
+  ArchCandy; TAPASS -> ArchCandy + TANGO + PASTA) and warns when a derived tool
+  is enabled alongside a tool it is built on, because the panel then counts one
+  line of evidence twice and every tier above it is inflated. Reports
+  effective_panel_size next to the configured one.
+
+  It also measures what is not declared. pairwise_overlap() computes Jaccard,
+  containment and a breadth ratio per pair, which flagged APPNN/AggreProt
+  (jaccard 0.503, containment 0.861, breadth ratio 0.635) -- consistent with a
+  shared training signal neither paper declares. Reported as a flag for the
+  reader, not as a derivation.
+
+analysis/per_protein.py, analysis/positional_permutation.py  (new)
+
+  The panel-level tests pool every protein's regions before testing, which gains
+  power for one directional question and hides two things that are often the
+  actual biology: which proteins carry the signal, and whether any of them point
+  the other way. per_protein_positional() and per_protein_domain_enrichment()
+  test within protein, Holm-corrected across proteins.
+
+  positional_permutation_test() replaces the decile chi-square against a flat
+  len(positions)/10 expectation. That expectation was wrong twice over: it
+  ignores that regions have length and that proteins have different lengths, and
+  it was underpowered wherever a decile held fewer than five regions. The
+  permutation null is the one already used for domain overlap -- whole regions
+  relocated uniformly within their own protein, lengths preserved, Phipson &
+  Smyth +1 correction -- so positional and domain enrichment are now tested
+  against the same null instead of two incompatible ones.
+
+io/adapters.py
+
+  Rewritten around a shared _read_table() that sniffs delimiter and encoding and
+  honours comment rows, plus _pick()/_optional() for name-based column lookup,
+  so a semicolon export or a BOM no longer silently yields one column.
+
+  AGGRESCAN: is_hotspot comes from the tool's own marker column, and from
+  NHSA > 0 when a file has none -- hand-scraped exports carry the six data
+  columns and no flag, and without the fallback they loaded with no hot spots at
+  all, which reads downstream as AGGRESCAN abstaining rather than as a missing
+  column. HSA is NOT interchangeable with NHSA: AGGRESCAN assigns shared area
+  before applying its run-length requirement, so Abeta42's isolated Y10 carries
+  HSA 0.122 while NHSA is 0.
+
+  _clean_flag() fixes a phantom APR: the historical AGGRESCAN CSVs carry
+  non-breaking spaces (0xCA, Mac Roman, carried out of the result HTML by a
+  copy-paste), which `notnull` on the raw Prediction column read as a call.
+
+  FoldAmyloid: reads the long-result window and skips its "---------" separator
+  row rather than letting it become a residue.
+
+  Cross-Beta: handles 0-based `index`, `mean_confidence` and AR_list -> in_AR.
+
+  ArchCandy: one _archcandy_track()/_archcandy_spans() pair now serves
+  archcandy, archcandy2 and archcandy_local, so the three cannot drift. The web
+  export ("Download results") gives only start, end and type; the Table view
+  matches the local output, and that is what the adapter expects.
+
+  New: parse_amylogram (11th tool, per-residue projection, not for the
+  manuscript). Fixed: parse_amyloid_predict.
+
+io/adapters.py -- AmyloDeep (opt-in), and analysis/independence.py -- mechanism
+families
+
+  AmyloDeep (Davtyan et al., 2025, bioRxiv 2025.09.16.676495) gets an adapter so
+  a protein-language-model predictor can be scored, compared and attributed
+  alongside the panel. It stays opt-in upstream: registering an adapter makes a
+  tool available, the config decides whether it votes, and for a fractional
+  consensus that distinction is the whole point -- adding one voter moves every
+  tier beneath it.
+
+  The model scores WINDOWS, not residues, and a window score taken at face value
+  is a silent corruption twice over: a 0-based window START read as a residue
+  index costs a one-residue N-terminal shift against every other tool, and the
+  window score itself mislocates a region by about half a window. The projection
+  is done upstream, and this adapter REFUSES a window table rather than accept
+  one, naming the consequence. With a 10-residue window a `max` projection can
+  exceed the evidence by up to 9 residues -- nearly twice AmyloGram's 5, and the
+  same family of artefact as Cross-Beta's 15 -- so its breadth belongs in the
+  cluster analysis before it is allowed to move a tier.
+
+  Three table shapes reach the adapter and two may pass: AmyloDeep 0.4's residue
+  table (`residue_number`, 1-based, written by default), its window table
+  (`window_start_0based`, what 0.3 emitted, written under --resolution window),
+  and aggressor-wrappers' own `Number, Residue, Score` projection. The refusal
+  identifies a window table by its marker column where the header carries one and
+  by row count otherwise. The row count alone is not sufficient: at window_size 1
+  there is one window per residue, so the count matches and only the column name
+  betrays the grain.
+
+  window_size and aggregate are read from the file rather than assumed, because
+  the CLI default moved (0.3: 10, 0.4: 6) and the two rules place a boundary
+  differently -- a table's provenance is what decides how far its shoulders can be
+  trusted. Where the source table carries them, coverage_depth,
+  window_min/mean/max/support/std, window_at_start and heads_used are carried
+  through as well. The consensus reads only Score, but the spread is what
+  distinguishes a residue at 0.35 whose covering windows ran 0.05 to 0.95 -- a
+  boundary residue -- from one every window agreed was mid-range, and heads_used
+  flags a run that dropped the XGBoost head and averaged four.
+
+  independence.py gains MECHANISM_FAMILIES, because derivation and composition
+  are different questions. Derivation asks whether a vote is duplicated;
+  composition asks how many genuinely different ways of reading a sequence the
+  panel contains. On the ribosomal panel plus AmyloDeep: 4 biophysical, 2 shallow
+  ML, and one each of matrix, structural, deep CNN and pLM. Four families rest on
+  a single tool, which the report now says explicitly -- agreement between a
+  solitary family and the rest is evidence from a different direction and worth
+  more than one vote, while its disagreement is not outvoted so much as
+  outnumbered. Families do NOT reduce effective_panel_size: shared inductive bias
+  is not a duplicated vote, and conflating the two would double-count the
+  correction.
+
+viz/clusters.py, viz/per_protein.py  (new)
+
+  Core-versus-extent bars, one row per cluster: the extent in the tier the
+  region was called at, the core drawn on top in its own tier colour. Reading
+  the two marks against each other is the point -- the figure exists to stop a
+  narrow high-agreement core and its wider low-agreement surroundings being
+  reported as one homogeneous call. Per-protein small multiples make the
+  Simpson's-paradox case visible: two proteins with opposite positional bias
+  that pool into "no effect".
+
+viz/style.py, viz/overlap.py, viz/correlation.py, viz/consensus.py,
+viz/detailed.py, viz/domains.py
+
+  Type sizes are now width-relative. A journal scales every figure to the same
+  column width, so what a reader compares is point size divided by figure width,
+  and fixing the point size alone makes a label in a 14-inch figure and a
+  24-inch figure render differently on the page. figure_fonts() resolves the
+  scale against each figure's actual width, replacing per-module _fonts()
+  helpers that resolved relative keywords against rcParams -- which rendered an
+  annotation at 17 pt on a poster preset while the label's character count
+  stayed the same, and that is what made labels collide. Tier colours moved to
+  an explicit three-colour list; positional enrichment plots the permutation
+  expectation profile rather than a flat line.
+
+core/consensus.py, core/regions.py, config.py, io/loader.py, cli.py
+
+  ConsensusResult retains raw_regions, so cluster analysis sees pre-merge
+  extents instead of re-deriving them. ToolSpec gained `options`, forwarded to
+  adapters by signature, so a per-tool setting such as amyloid_predict's
+  score_column no longer needs a bespoke adapter. _warn_shared_paths() catches
+  two tools configured to read the same file. _normalise_flag now passes
+  na_action="ignore", so a NaN is not stringified into a truthy value. New
+  `ingest` CLI subcommand.
+
+pipeline.py, examples/ribosomal/
+
+  Clusters and the independence check are wired in and emit apr_clusters.{tsv,
+  txt,png,svg}, predictor_breadth.tsv, predictor_independence.txt and
+  predictor_overlap.tsv. A duplicated plot_positional_enrichment call is
+  removed. The example config gains AmyloGram, flag-based detection for
+  Aggrescan and FoldAmyloid, and viz.detailed.
+
+Tests
+
+  79 passed. New: test_clusters.py, test_independence.py,
+  test_adapters_amylodeep.py and
+  test_adapters_aggrescan.py -- the last pins NHSA rather than HSA as the
+  hot-spot mask, with Y10 as the discriminating case. The AmyloDeep tests cover
+  both residue-grain shapes, the provenance columns surviving the adapter, a
+  four-head run staying identifiable, and the window_size-1 case where the row
+  count matches but the grain is still wrong.

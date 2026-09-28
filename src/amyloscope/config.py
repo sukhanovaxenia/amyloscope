@@ -161,6 +161,17 @@ class ToolSpec:
     detection: DetectionStrategy = field(default_factory=DetectionStrategy)
     color: str = "#333333"
     enabled: bool = True
+    options: dict[str, Any] = field(default_factory=dict)
+    """Adapter-specific keyword arguments, passed through by the loader.
+
+    Some predictors emit several parallel tracks in one file and the choice
+    between them is a modelling decision, not a parsing detail: amyloid_predict
+    reports the same residue averaged over 6-, 10- and 15-residue probes, and
+    AmyloGram's hexapeptide probabilities can be projected onto residues by
+    maximum or by mean. Previously such a choice could only be written as a
+    comment next to a hardcoded default, which is how the panel ended up
+    plotting the 6-aa track while calling APRs from the 15-aa-smeared summary.
+    """
 
     def path_for(self, protein_id: str) -> Path:
         """Resolve ``path_template`` for a given protein id."""
@@ -347,6 +358,9 @@ DEFAULT_DOMAIN_PALETTE: dict[str, str] = {
     "terminal": "#756BB1",
     "conserved": "#99000D",
     "default": "#CCCCCC",
+    "preprocessing_domain": "#FF29D5",
+    "peptidase": "#28C4BF",
+    "partial_peptidase": "#2B28C4",
     "связывание рнк": "#4292C6",
     "связывание днк": "#4292C6",
     "структурированное_ядро": "#41AB5D",
@@ -522,6 +536,7 @@ def _build_tool(raw: dict[str, Any]) -> ToolSpec:
             detection=_build_detection(raw.get("detection")),
             color=raw.get("color", "#333333"),
             enabled=raw.get("enabled", True),
+            options=dict(raw.get("options", {}) or {}),
         )
     except KeyError as exc:
         raise ConfigError(f"tool entry missing required key {exc}") from exc

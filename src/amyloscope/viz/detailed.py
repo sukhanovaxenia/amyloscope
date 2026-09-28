@@ -141,12 +141,14 @@ def _tier_ramp(tiers):
     red/blue/orange palette does not.
     """
     n = len(tiers)
-    cmap = _style.get_cmap("YlOrRd")
+    # cmap = _style.get_cmap("YlOrRd") # "#FDAE61" "#2166AC" "#B2182B"
+    cmap = ["#FDAE61", "#2166AC", "#B2182B"]
     out = {}
     # tiers_by_strength is strongest-first; reverse so the weakest maps to light
     for i, t in enumerate(reversed(tiers)):
-        frac = 0.35 + 0.55 * (i / max(1, n - 1))
-        out[t.name] = cmap(frac)
+        # frac = 0.35 + 0.55 * (i / max(1, n - 1))
+        # out[t.name] = cmap(frac)
+        out[t.name] = cmap[i]
     return out
 
 
@@ -538,16 +540,16 @@ def plot_all_proteins_agreement(result, dataset, config, figsize=None):
             seen.add(k)
             ax.axhline(k, color="#B23A48", linestyle=styles[i % len(styles)],
                        linewidth=0.8, alpha=0.7, label=tr(tier.name, k=k))
-        ax.set_ylabel(pt.spec.label, fontweight="bold", fontsize="small")
+        ax.set_ylabel(pt.spec.label, fontweight="bold", fontsize=14)
         ax.set_ylim(0, panel_size + 0.5)
         ax.set_xlim(0, length)
-        ax.tick_params(labelsize="xx-small")
+        ax.tick_params(labelsize=12)
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
 
     axes[0].set_title(tr("profile"), fontsize="large", fontweight="bold")
     axes[0].legend(loc="upper right", fontsize="xx-small", framealpha=0.9)
-    axes[-1].set_xlabel(tr("position"))
+    axes[-1].set_xlabel(tr("position"), fontweight="bold", fontsize=14)
     fig.supylabel(tr("n_tools"), fontsize="small")
     fig.tight_layout()
     return fig

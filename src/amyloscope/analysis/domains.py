@@ -44,6 +44,7 @@ import numpy as np
 
 from ..config import PipelineConfig
 from ..core.consensus import ConsensusResult
+from .per_protein import ProteinDomainEnrichment, per_protein_domain_enrichment
 
 #: Placements drawn for the relocation null. 200 000 resolves a two-sided p to
 #: about 1e-5, well below anything this design can claim.
@@ -100,13 +101,13 @@ class DomainOverlapResult:
     enrichment: list[CategoryEnrichment] = field(default_factory=list)
     primary_category: Optional[str] = None
     draws: int = DEFAULT_DRAWS
-    #: Permutation null per category, stored as a count histogram indexed by
-    #: residue count. The figure needs the whole distribution, not just the
-    #: p-value — a p alone cannot show whether an effect sits at the edge of a
-    #: broad null or outside a narrow one. Keeping the raw draws would be a few
-    #: megabytes per category; the histogram is a few dozen integers and loses
-    #: nothing, since the statistic is integer-valued by construction.
     null_hist: dict[str, list[int]] = field(default_factory=dict)
+    #: Per-protein enrichment for the primary category, Holm-corrected across
+    #: proteins. Empty when no primary category is declared — the per-protein
+    #: test operationalises the directional hypothesis, so it is not run for
+    #: exploratory categories. This is what shows WHICH proteins drive the
+    #: pooled signal and which are carried by domain coverage.
+    per_protein_enrichment: list[ProteinDomainEnrichment] = field(default_factory=list)
 
     # sum(), not len(). The previous versions called len() on a generator
     # expression, which raises TypeError and would abort the report.
@@ -160,6 +161,7 @@ def compute_domain_overlap(
     primary_category: Optional[str] = None,
     draws: int = DEFAULT_DRAWS,
     seed: int = 0,
+    per_protein_draws: int = 50_000,   # per protein x this, so smaller than draws
 ) -> DomainOverlapResult:
     """APR residues inside vs outside domains, plus per-category enrichment.
 
@@ -214,6 +216,26 @@ def compute_domain_overlap(
         for e in out.enrichment:
             if e.category == primary_category:
                 e.p_holm = e.p_greater      # pre-specified, one-sided, m = 1
+                # Per-protein enrichment for the pre-specified category only: it
+        # operationalises the directional hypothesis, and running it for every
+        # exploratory category x every protein would be a multiplicity thicket.
+        if primary_category is not None:
+            regions_by_protein = {
+                p: [(r.start, r.end) for r in result.regions[p]]
+                for p in apr_by_protein
+            }
+            lengths = {
+                p: (config.protein(p).length or max(apr_by_protein[p]))
+                for p in apr_by_protein
+            }
+            cat_res = {
+                p: _category_residues(config.protein(p), primary_category)
+                for p in apr_by_protein
+            }
+            out.per_protein_enrichment = per_protein_domain_enrichment(
+                regions_by_protein, lengths, cat_res, primary_category,
+                draws=per_protein_draws, seed=seed,
+            )
     return out
 
 
@@ -337,6 +359,26 @@ def format_overlap_report(result: DomainOverlapResult) -> str:
             f"{e.category:18s}{f'{100 * e.coverage:.0f}%':>12s}{e.observed_aa:6d}"
             f"{e.expected_aa:8.1f}{e.fold:7.2f}{p_raw:9.4f}{e.p_holm:9.4f}{tag}"
         )
+    if result.per_protein_enrichment:
+        lines += [
+            "",
+            f"PER-PROTEIN ENRICHMENT ({result.primary_category}, one-sided)",
+            "-" * 40,
+            "Which proteins drive the pooled signal. 'forced' marks a domain",
+            "covering >=90% of the protein, where 'in domain' is inevitable and",
+            "carries no enrichment information.",
+            "",
+            f"{'protein':16s}{'n':>3s}{'cover':>8s}{'obs':>6s}{'exp':>8s}"
+            f"{'fold':>7s}{'p':>9s}{'p_adj':>9s}",
+        ]
+        for e in sorted(result.per_protein_enrichment, key=lambda r: r.p_greater):
+            label = result.config.label_for(e.protein)
+            flag = "  forced" if e.coverage_forced else ""
+            lines.append(
+                f"{label[:16]:16s}{e.n_regions:3d}{e.coverage * 100:7.0f}%"
+                f"{e.observed_in_domain:6d}{e.expected_in_domain:8.1f}"
+                f"{e.fold:7.2f}{e.p_greater:9.4f}{e.p_holm:9.4f}{flag}"
+            )
     lines += ["", "INTERPRETATION", "-" * 40,
               _interpret(result), "", "=" * 70]
     return "\n".join(lines)
@@ -374,4 +416,20 @@ def _interpret(result: DomainOverlapResult) -> str:
             f"domains is {primary.fold:.2f}-fold and does not reach significance "
             f"(one-sided p = {primary.p_greater:.4f})."
         )
+    drivers = [e for e in result.per_protein_enrichment
+               if e.p_holm < 0.05 and not e.coverage_forced]
+    if result.per_protein_enrichment:
+        if drivers:
+            names = ", ".join(result.config.label_for(e.protein) for e in drivers)
+            parts.append(
+                f"Per-protein, the enrichment is carried by {names} "
+                f"(Holm p < 0.05); proteins whose domains span most of their "
+                f"length contribute overlap forced by coverage, not enrichment."
+            )
+        else:
+            parts.append(
+                "No single protein reaches per-protein significance after Holm "
+                "correction; the pooled result rests on aggregated weak signal "
+                "rather than one strong protein."
+            )
     return "\n".join(parts)

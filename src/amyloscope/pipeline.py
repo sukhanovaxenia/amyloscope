@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .analysis.clusters import build_clusters, format_cluster_report
+from .analysis.independence import check_independence, pairwise_overlap
 from .analysis.domains import compute_domain_overlap, format_overlap_report
 from .analysis.statistics import compute_statistics, format_report
 from .config import PipelineConfig, load_config
@@ -63,8 +65,44 @@ def run(config: PipelineConfig, make_figures: bool = True) -> PipelineArtifacts:
         overlap_path.write_text(format_overlap_report(overlap), encoding="utf-8")
         written.append(str(overlap_path))
 
+    # APR clusters: the peak-agreement core inside each called region, with a
+    # provenance verdict on the shoulder. Written unconditionally because the
+    # table is the deliverable; the figure is optional.
+    # Declared non-independence: warns, and records the effective denominator.
+    independence = check_independence(config)
+    overlap_rows = pairwise_overlap(dataset, config)
+    independence_path = out_dir / "predictor_independence.txt"
+    text = independence.as_text() + (
+        "\n\nMeasured pairwise overlap (top 12 by containment).\n"
+        "Read containment WITH breadth_ratio: a narrow caller is almost always\n"
+        "contained in a broad one by arithmetic alone. High containment at a\n"
+        "breadth_ratio near 1 -- two tools of similar reach calling the same\n"
+        "residues -- is the pattern that suggests a shared signal.\n\n")
+    for row in overlap_rows[:12]:
+        text += (f"  {row['tool_a']:16s} {row['tool_b']:16s} "
+                 f"jaccard={row['jaccard']:.3f} containment={row['containment_min']:.3f} "
+                 f"breadth_ratio={row['breadth_ratio']:.3f} shared={row['shared_aa']}\n")
+    independence_path.write_text(text, encoding="utf-8")
+    written.append(str(independence_path))
+    import pandas as _pd
+    overlap_path = out_dir / "predictor_overlap.tsv"
+    _pd.DataFrame(overlap_rows).to_csv(overlap_path, sep="\t", index=False)
+    written.append(str(overlap_path))
+
+    clusters = build_clusters(dataset, result)
+    cluster_path = out_dir / "apr_clusters.tsv"
+    clusters.to_dataframe().to_csv(cluster_path, sep="\t", index=False)
+    written.append(str(cluster_path))
+    breadth_path = out_dir / "predictor_breadth.tsv"
+    clusters.breadth_to_dataframe().to_csv(breadth_path, sep="\t", index=False)
+    written.append(str(breadth_path))
+    report_path = out_dir / "apr_clusters.txt"
+    report_path.write_text(format_cluster_report(clusters), encoding="utf-8")
+    written.append(str(report_path))
+
     if make_figures:
-        written += _render_figures(dataset, result, out_dir, overlap=overlap)
+        written += _render_figures(dataset, result, stats, out_dir, overlap=overlap,
+                                   clusters=clusters)
 
     return PipelineArtifacts(dataset=dataset, consensus=result,
                              written_files=written, overlap=overlap)
@@ -77,7 +115,8 @@ def run_from_file(
     return run(load_config(config_path), make_figures=make_figures)
 
 
-def _render_figures(dataset, result, out_dir: Path, overlap=None) -> list[str]:
+def _render_figures(dataset, result, stats, out_dir: Path, overlap=None,
+                    clusters=None) -> list[str]:
     # Imported here, not at module scope, so `import amyloscope` and the
     # sequence-only modules (e.g. amyloscope.mutate) work without matplotlib;
     # the plotting stack is only needed when figures are actually rendered.
@@ -90,6 +129,7 @@ def _render_figures(dataset, result, out_dir: Path, overlap=None) -> list[str]:
     from .viz import overlap as viz_overlap
     from .viz import style as viz_style
     from .viz import tracks as viz_tracks
+    from .viz import per_protein as viz_per_protein
 
     config = dataset.config
     written: list[str] = []
@@ -102,8 +142,20 @@ def _render_figures(dataset, result, out_dir: Path, overlap=None) -> list[str]:
 
     # ---- panel-level figures ---------------------------------------------- #
     _save(viz_consensus.plot_distribution(result), "consensus_distribution.png")
-    _save(viz_consensus.plot_positional_enrichment(result),
+    # Rendered ONCE. The call was duplicated verbatim, so the figure was built
+    # and written twice per run and appeared twice in `written` -- which made the
+    # artifact list look like two different files and doubled the cost of the
+    # panel's second-most expensive figure.
+    _save(viz_consensus.plot_positional_enrichment(result, stats),
           "positional_enrichment.png")
+    # Per-protein positional breakdown: the panel-level enrichment pools every
+    # protein, which hides whether a positional trend is shared or driven by one
+    # chain. With a panel this small that distinction decides the interpretation.
+    _save(viz_per_protein.plot_per_protein_positional(result, stats),
+          "per_protein_positional.png")
+    if clusters is not None:
+        from .viz import clusters as viz_clusters
+        _save(viz_clusters.plot_cluster_cores(clusters, config), "apr_clusters.png")
 
     if any(p.domains for p in config.proteins):
         _save(viz_domains.plot_domain_architecture(result),

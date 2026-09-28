@@ -19,6 +19,7 @@ import numpy as np
 from matplotlib.patches import FancyBboxPatch, Rectangle
 
 from ..core.consensus import ConsensusResult
+from ..analysis.statistics import ConsensusStatistics
 from . import labels as _labels
 from . import style as _style
 
@@ -110,9 +111,8 @@ def plot_distribution(result: ConsensusResult, figsize=None):
     return fig
 
 
-def plot_positional_enrichment(result: ConsensusResult, figsize=None):
+def plot_positional_enrichment(result: ConsensusResult, stats: ConsensusStatistics,figsize=None):
     import matplotlib.pyplot as plt
-    import scipy.stats as sc_stats
     import seaborn as sns
 
     config = result.config
@@ -135,8 +135,8 @@ def plot_positional_enrichment(result: ConsensusResult, figsize=None):
     bins = np.linspace(0, 1, 11)
     counts, edges = np.histogram(positions, bins=bins)
     centers = (edges[:-1] + edges[1:]) / 2
-    expected = len(positions) / 10
-    chi2, p = sc_stats.chisquare(counts, [expected] * 10)
+    # The old positional bias staitistics estimation - Chi-square
+    # chi2, p = sc_stats.chisquare(counts, [expected] * 10)
 
     # The chi-square test assumes an expected count of at least ~5 per cell.
     # With nine consensus regions pooled across two proteins the expectation is
@@ -144,19 +144,31 @@ def plot_positional_enrichment(result: ConsensusResult, figsize=None):
     # unqualified invites a referee to discard the whole panel. Flag it rather
     # than suppress it: the histogram is still a legitimate description of where
     # the regions fall, it is only the test statistic that is uninterpretable.
-    underpowered = expected < 5.0
 
     colours = sns.color_palette("RdYlBu_r", n_colors=10)
     ax.bar(centers, counts, width=0.08, color=colours, edgecolor="#333333",
            linewidth=0.6, alpha=0.85)
-    ax.axhline(expected, color="#CC0000", linestyle="--", linewidth=1.5,
-               alpha=0.7, label=tr("expected_uniform"))
 
+    expected_flat = len(positions) / 10 # scalar, for fallback and flag
+    profile = getattr(stats, "expected_decile_profile", None)
+    if profile:
+           ax.step(centers, profile, where="mid",
+                   color="#CC0000", linestyle="--", linewidth=1.5, alpha=0.7,
+                   label=tr("expected_uniform"))
+    else:
+        ax.axhline(expected_flat, color="#CC0000", linestyle="--", linewidth=1.5,
+                alpha=0.7, label=tr("expected_uniform"))
+
+    underpowered = expected_flat < 5.0
+    p = stats.chi2_p_value            # permutation p from compute_statistics
+    
     sig = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "ns"
-    note = (f"$\\chi^2$ = {chi2:.2f}\n$p$ = {p:.3f}   {sig}\n"
-            f"$n$ = {len(positions)} regions")
+    # note = (f"$\\chi^2$ = {chi2:.2f}\n$p$ = {p:.3f}   {sig}\n"
+    #         f"$n$ = {len(positions)} regions")
+    note = (f"perm $p$ = {p:.3f}   {sig}\n$n$ = {len(positions)} regions")
+
     if underpowered:
-        note += f"\nexpected {expected:.1f}/bin \u2014 asymptotic $p$ unreliable"
+        note += f"\nsparse: {expected_flat:.1f} region(s)/bin"
     ax.text(0.03, 0.97, note, transform=ax.transAxes, fontsize="small", va="top",
             linespacing=1.4,
             bbox=dict(boxstyle="round,pad=0.45",

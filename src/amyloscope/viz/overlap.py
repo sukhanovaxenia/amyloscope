@@ -39,10 +39,6 @@ _BOX_Q = (25.0, 75.0)
 _WHISKER_Q = (2.5, 97.5)
 
 
-def _fonts(viz) -> dict[str, float]:
-    base = getattr(viz, "resolved_base_font", 11.0)
-    return {"title": base * 1.00, "label": base * 0.90, "tick": base * 0.78,
-            "annot": base * 0.72, "star": base * 0.95}
 
 
 def _hist_percentiles(hist, quantiles) -> list[float]:
@@ -93,11 +89,11 @@ def plot_domain_overlap(result: DomainOverlapResult, style: str = "publication",
     viz = config.viz
     _style.apply_style(viz)
     tr = _labels.translator(viz.language)
-    fonts = _fonts(viz)
     fs = getattr(viz, "resolved_figure_scale", 1.0)
 
     rows = list(result.enrichment)
     if not rows:
+        fonts = _style.figure_fonts(viz, 8 * fs)
         fig, ax = plt.subplots(figsize=(8 * fs, 3 * fs), facecolor="white")
         ax.text(0.5, 0.5, tr("ov_no_regions"), ha="center", va="center",
                 transform=ax.transAxes)
@@ -115,6 +111,10 @@ def plot_domain_overlap(result: DomainOverlapResult, style: str = "publication",
     if diagnostic:
         widths.append(0.62)
     figsize = figsize or (sum(widths) * 4.6 * fs, 4.8 * fs)
+    # Sizes come from the shared width-relative scale, resolved against this
+    # figure's actual width, so the type matches every other module once both
+    # are placed at a common column width.
+    fonts = _style.figure_fonts(viz, figsize[0])
     fig = plt.figure(figsize=figsize, facecolor="white")
     gs = fig.add_gridspec(1, len(widths), width_ratios=widths, wspace=0.30)
     ax = fig.add_subplot(gs[0, 0])

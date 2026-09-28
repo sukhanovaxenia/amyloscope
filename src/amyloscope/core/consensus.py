@@ -277,7 +277,17 @@ def consensus_for_protein(
             "position-wise but failed the region criteria",
             protein_tracks.spec.id, len(rejected), floor_count, panel_size,
         )
-    return _resolve_overlaps(raw_regions, cfg.overlap_resolution_max), rejected
+    # The pre-resolution set is returned alongside the resolved one. Overlap
+    # resolution deletes a lower-tier region that overlaps a retained one by
+    # >= overlap_resolution_max of its own length -- which is exactly the
+    # moderate shoulder around a strong core. Discarding it made that pattern
+    # invisible in every table downstream while it remained plainly visible in
+    # the per-tool track figures. Nothing about the resolved output changes.
+    return (
+        _resolve_overlaps(raw_regions, cfg.overlap_resolution_max),
+        rejected,
+        raw_regions,
+    )
 
 
 def _finalise_window(
@@ -337,6 +347,9 @@ class ConsensusResult:
     config: PipelineConfig
     regions: dict[str, list[ConsensusRegion]] = field(default_factory=dict)
     rejected: dict[str, list[RejectedWindow]] = field(default_factory=dict)
+    #: Regions before overlap resolution. Superset of ``regions``; used by the
+    #: cluster analysis, which needs the overlaps that resolution removes.
+    raw_regions: dict[str, list[ConsensusRegion]] = field(default_factory=dict)
 
     def all_regions(self) -> list[ConsensusRegion]:
         return [r for regs in self.regions.values() for r in regs]
@@ -359,7 +372,8 @@ def compute_consensus(dataset) -> ConsensusResult:
     """Compute consensus regions for every protein in a loaded dataset."""
     result = ConsensusResult(config=dataset.config)
     for protein_tracks in dataset:
-        regions, rejected = consensus_for_protein(protein_tracks, dataset.config)
+        regions, rejected, raw = consensus_for_protein(protein_tracks, dataset.config)
         result.regions[protein_tracks.spec.id] = regions
         result.rejected[protein_tracks.spec.id] = rejected
+        result.raw_regions[protein_tracks.spec.id] = raw
     return result

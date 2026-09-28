@@ -83,7 +83,12 @@ tools:
     adapter: aggrescan
     path: examples/ribosomal/data/aggrescan/{protein}.csv
     color: "#1B9E77"
-    detection: {method: notnull, column: Prediction}
+    # `flag` on the cleaned boolean, NOT `notnull` on the raw Prediction column.
+    # AGGRESCAN leaves Prediction blank outside Hot Spots, but its exports also
+    # carry stray non-breaking spaces there (0xCA in the Mac Roman files). Under
+    # `notnull` that whitespace is indistinguishable from a call: on the real
+    # RPL27 export it produced a phantom single-residue APR at position 1.
+    detection: {method: flag, column: is_hotspot, flag_true_values: [true]}
 
   - name: APPNN
     adapter: appnn
@@ -95,7 +100,7 @@ tools:
     adapter: foldamyloid
     path: examples/ribosomal/data/foldamyloid/{protein}.csv
     color: "#7570B3"
-    detection: {method: flag, column: Fold, flag_true_values: ["f"]}
+    detection: {method: flag, column: is_amyloidogenic, flag_true_values: [true]}
 
   - name: PASTA2
     adapter: pasta2
@@ -126,12 +131,77 @@ tools:
     path: examples/ribosomal/data/archcandy/{protein}.csv
     color: "#666666"
     detection: {method: present}
+    # For output from the CURRENT service (ArchCandy 2.0, columns
+    # ID,Sequence,Arch,Start,Stop,Score) use `adapter: archcandy2` instead and
+    # threshold on Score. ArchCandy 2.0's documentation gives a three-band
+    # calibration, not one cutoff:
+    #     < 0.40          non-significant
+    #     0.40 - 0.57     ambiguous
+    #     >= 0.57         significant     <- what a positive call should mean
+    # 0.40 is the web submission default. A detection threshold below 0.40
+    # selects predictions the authors' own benchmark calls non-significant, so a
+    # consensus vote built on them inherits that status rather than being a
+    # weaker version of the same claim.
+    #
+    #   adapter: archcandy2
+    #   options: {score_mode: highest}       # `cumulative` leaves the [0,1] scale
+    #   detection: {method: above, column: Score, threshold: 0.57}
+
+  - name: amyloid_predict
+    adapter: amyloid_predict
+    path: results/example_per_res_scores.csv
+    color: "#07EAF2"
+    # The probe width is now a real setting, not a comment. It used to be neither:
+    # the adapter hardcoded 6aa_Avg_Score as Score while this detection rule read
+    # Avg_Score, so the track that was plotted and the track that called APRs were
+    # different quantities.
+    #   Avg_Score      - the tool's own summary (used here); smears APR boundaries
+    #                    by up to ~7 residues via the 15-aa probe, and is inflated
+    #                    at the termini by that same wide window.
+    #   6aa_Avg_Score  - sharpest boundary localisation; on the example sequence it
+    #                    resolves a 6-11 core where Avg_Score gives 3-22.
+    options: {score_column: Avg_Score}
+    detection: {method: above, column: Score, threshold: 0.5}
+    # No single canonical cutoff ships with the tool; 0.4-0.6 is the sensible range
+    # on the example. 0.5 is the midpoint.
+
+  # --- 11th predictor -------------------------------------------------------
+  # AmyloGram is an n-gram model over a reduced amino-acid alphabet, trained on
+  # the hexapeptides of AmyLoad (Burdukiewicz et al., 2017, PeerJ). It returns
+  # one probability per QUERY, not per residue, so it joins a positional
+  # consensus only through an explicit projection: aggressor-wrappers scores
+  # every overlapping 6-mer and aggregates the windows covering each position,
+  # writing the Number,Residue,Score table read here.
+  #
+  # It is mechanistically distinct from every other member of the panel --
+  # sequence-composition statistics rather than hydrophobic clustering
+  # (AGGRESCAN), packing density (FoldAmyloid), beta-pairing energy (PASTA2),
+  # position-specific matrices (Waltz) or beta-arch geometry (ArchCandy) -- so
+  # it adds an independent vote rather than a correlated one.
+  #
+  # Generate with:
+  #   aggressor-run --predictors amylogram --fasta <panel>.fasta --out <dir>
+  # then point `path` at the *_amylogram_per_residue.csv files.
+  - name: AmyloGram
+    adapter: amylogram
+    path: examples/ribosomal/data/amylogram/{protein}.csv
+    color: "#8C564B"
+    options: {threshold: 0.5}
+    detection: {method: above, column: Score, threshold: 0.5}
+
 
 # --------------------------------------------------------------------------- #
-# Consensus model. Tiers are fractions of the active predictor set, so the
-# scheme is invariant to how many tools are run: with eight enabled predictors,
-# `unanimous` = 8/8, `strong` >= 6/8, `moderate` >= 4/8, exactly reproducing the
-# original 8/6/4 thresholds -- but now self-adjusting if a tool is dropped.
+# Consensus model. Tiers are fractions of the ACTIVE predictor set, so the
+# scheme is invariant to how many tools are run. With the ten tools enabled
+# below, `unanimous` = 10/10, `strong` >= 8/10, `moderate` >= 5/10; enabling
+# AmyloGram makes it 11/11, >= 9/11 and >= 6/11.
+#
+# `denominator: configured` counts every CONFIGURED tool, not every tool that
+# loaded. That is the conservative choice -- a predictor that failed to parse
+# cannot inflate agreement by leaving the denominator -- but it means a silent
+# load failure lowers every fraction. Check the load warnings before reading
+# tiers: the loader names each failure, and a tool that is absent for one
+# protein and present for another makes those two proteins incomparable.
 # --------------------------------------------------------------------------- #
 consensus:
   tiers:
@@ -147,3 +217,8 @@ viz:
   dpi: 200
   save_svg: true
   font_family: DejaVu Sans
+  # `detailed` gates the per-protein analysis panels (plot_tool_analysis,
+  # plot_consensus_analysis) and the two cross-protein overviews. It defaults to
+  # false, so a config that does not set it renders only the track figures --
+  # which is why the per-protein panels never appeared in example runs.
+  detailed: true

@@ -20,6 +20,7 @@ from ..config import ConsensusConfig, VizConfig
 TOOL_PALETTE = [
     "#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E",
     "#E6AB02", "#A6761D", "#666666", "#1F78B4", "#B15928",
+    "#07EAF2",
 ]
 
 
@@ -181,3 +182,47 @@ def save_figure(fig, path, viz: VizConfig) -> list[str]:
         fig.savefig(svg, bbox_inches="tight", facecolor="white")
         written.append(str(svg))
     return written
+
+# --------------------------------------------------------------------------- #
+# Figure-relative type scale
+# --------------------------------------------------------------------------- #
+
+#: Point size per inch of figure width, per role. A journal scales every figure
+#: to the same column width, so what a reader compares is not the point size but
+#: the point size divided by the figure width. Fixing that ratio makes a label in
+#: a 14-inch figure and a label in a 24-inch figure render identically on the
+#: page, which fixing the point size alone does not.
+#:
+#: The anchor is the domain-architecture figure, whose axis labels are "small"
+#: (0.833 x base) on a 16 x figure_scale inch canvas, giving 0.694 pt/in. Before
+#: this table the package carried four conventions — consensus.py used the
+#: rcParams default at 1.16 pt/in, tracks.py "medium" at 0.95, domains.py "small"
+#: at 0.69 and the two newest modules 0.89 — so any figure looked wrong beside
+#: some other one.
+TYPE_SCALE = {
+    "suptitle": 1.05,
+    "title": 0.82,
+    "label": 0.70,
+    "tick": 0.60,
+    "point": 0.62,   # in-plot data labels
+    "star": 0.72,    # significance markers, set above "point" so a
+                     # marker reads at a glance without a legend
+    "annot": 0.55,   # statistics blocks, legends, footnotes
+}
+
+#: Below this a label stops being legible whatever the arithmetic says, and
+#: above it a small figure starts to shout. Both are in points.
+FONT_MIN, FONT_MAX = 6.0, 22.0
+
+
+def figure_fonts(viz, width_in: float) -> dict[str, float]:
+    """Point sizes for one figure, scaled to its width.
+
+    Pass the figure's actual width in inches; the returned sizes hold the same
+    ratio to it in every module, so figures rendered at different canvas sizes
+    match once placed at a common column width.
+    """
+    return {
+        role: min(FONT_MAX, max(FONT_MIN, ratio * float(width_in)))
+        for role, ratio in TYPE_SCALE.items()
+    }

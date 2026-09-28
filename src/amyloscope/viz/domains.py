@@ -140,10 +140,11 @@ def plot_domain_architecture(result: ConsensusResult, figsize=None):
                     f"{region.start}-{region.end}", ha="center", va="bottom",
                     fontsize="small", fontweight="bold")
 
-        ax.set_ylabel(spec.label, fontweight="bold", fontsize="small")
+        ax.set_ylabel(spec.label, fontweight="bold", fontsize=14)
         if ax is axes[-1]:
-            ax.set_xlabel(tr("axis_position_aa"), fontsize="small")
+            ax.set_xlabel(tr("axis_position_aa"), fontweight="bold", fontsize=14)
         ax.set_yticks([])
+        ax.tick_params(labelsize=12)
         ax.grid(True, axis="x", alpha=0.15, linestyle=":", linewidth=0.5)
         for sp in ("top", "right", "left"):
             ax.spines[sp].set_visible(False)

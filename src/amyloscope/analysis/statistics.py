@@ -14,11 +14,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import numpy as np
-import scipy.stats as sc_stats
 
 from ..config import PipelineConfig
 from ..core.consensus import ConsensusResult
-
+from ..analysis.positional_permutation import positional_permutation_test
+from .per_protein import PerProteinPositional, per_protein_positional
 
 @dataclass
 class ConsensusStatistics:
@@ -43,7 +43,8 @@ class ConsensusStatistics:
     proteins_with_regions: int = 0
     total_proteins: int = 0
     decile_counts: list[int] = field(default_factory=list)
-
+    expected_decile_profile: list[float] = field(default_factory=list)
+    per_protein_positional: list[PerProteinPositional] = field(default_factory=list)
 
 def compute_statistics(result: ConsensusResult) -> ConsensusStatistics:
     """Derive distributional statistics from a consensus result."""
@@ -79,15 +80,26 @@ def compute_statistics(result: ConsensusResult) -> ConsensusStatistics:
             positions.append(r.normalized_position(plen))
     positions = np.array([p for p in positions if 0.0 <= p <= 1.0])
 
-    # Decile chi-square test against a uniform distribution.
-    bins = np.linspace(0, 1, 11)
-    counts, _ = np.histogram(positions, bins=bins)
-    stats.decile_counts = counts.tolist()
-    expected = len(positions) / 10
-    chi2, p = sc_stats.chisquare(counts, [expected] * 10)
-    stats.chi2_statistic = float(chi2)
-    stats.chi2_p_value = float(p)
-    stats.positional_distribution = "uniform" if p > 0.05 else "non-uniform"
+    # Permutation test against a uniform distribution.
+    regions_by_protein = {
+        pid: [(r.start, r.end) for r in regs]
+        for pid, regs in result.regions.items() if regs
+    }
+    lengths = {pid: _protein_length(result, pid) for pid in regions_by_protein}
+
+    perm = positional_permutation_test(regions_by_protein, lengths, seed=0)
+    stats.decile_counts = perm["decile_counts"]
+    stats.chi2_statistic = perm["chi2_distance"]     # now a distance, not a test stat
+    stats.chi2_p_value = perm["p_value"]             # permutation p, valid at any n
+    stats.positional_distribution = (
+        "uniform" if perm["p_value"] > 0.05 else "non-uniform"
+    )
+    stats.per_protein_positional = per_protein_positional(
+        regions_by_protein, lengths, seed=0
+    )
+    # Optional but recommended: keep the null's expected profile for the figure, so
+    # the "expected uniform" line reflects the achievable (non-flat) distribution.
+    stats.expected_decile_profile = perm["expected_decile_profile"]
 
     # Tertile partition for an interpretable N/centre/C summary.
     stats.n_terminal_count = int(np.sum(positions < 0.33))
@@ -95,7 +107,7 @@ def compute_statistics(result: ConsensusResult) -> ConsensusStatistics:
     stats.central_count = int(
         np.sum((positions >= 0.33) & (positions <= 0.67))
     )
-    if p < 0.05:
+    if stats.chi2_p_value < 0.05:
         if stats.n_terminal_count > max(stats.central_count, stats.c_terminal_count):
             stats.enrichment_pattern = "N-terminal enrichment"
         elif stats.c_terminal_count > max(stats.n_terminal_count, stats.central_count):
@@ -163,9 +175,9 @@ def format_report(
         "",
         "POSITIONAL DISTRIBUTION",
         "-" * 40,
-        "Chi-square test vs. uniform (deciles):",
-        f"  chi2 = {stats.chi2_statistic:.3f}",
-        f"  p    = {stats.chi2_p_value:.4f}",
+        "Positional enrichment (permutation vs. relocation null):",
+        f"  chi2 distance = {stats.chi2_statistic:.3f}",
+        f"  p (perm) = {stats.chi2_p_value:.4f}",
         f"  -> {stats.positional_distribution.upper()}",
         "",
         "Tertile partition:",
@@ -178,6 +190,29 @@ def format_report(
         "INTERPRETATION",
         "-" * 40,
     ]
+    if stats.per_protein_positional:
+        lines += [
+            "",
+            "PER-PROTEIN POSITIONAL",
+            "-" * 40,
+            "Where each protein's regions fall on its own 0-1 axis. Pooling can",
+            "cancel opposite per-protein biases; the clustering p is shown only",
+            "where a protein has enough regions to resolve it (>=4), otherwise",
+            "the mean position is descriptive.",
+            "",
+        ]
+        for pp in stats.per_protein_positional:
+            label = config.label_for(pp.protein)
+            zone = ("N-term" if pp.mean_position < 0.4
+                    else "C-term" if pp.mean_position > 0.6 else "central")
+            ptxt = (f"clustering p = {pp.clustering_p:.3f}"
+                    if pp.clustering_p == pp.clustering_p
+                    else "clustering p n/a (n<4)")
+            lines.append(
+                f"  {label:14s} n={pp.n_regions:<3d} mean={pp.mean_position:.2f} "
+                f"({zone});  {ptxt}"
+            )
+                
     if config.hypothesis:
         lines.append(config.hypothesis.strip())
     else:

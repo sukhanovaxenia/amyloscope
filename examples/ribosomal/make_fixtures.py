@@ -134,6 +134,32 @@ def write_archcandy(p: str, length: int, seq: str, win, path: Path) -> None:
     path.write_text("\n".join(rows) + "\n")
 
 
+def write_amylogram(p: str, length: int, seq: str, win, path: Path) -> None:
+    """AmyloGram per-residue table, as aggressor-wrappers projects it.
+
+    AmyloGram scores hexapeptides, not residues, so the file the panel consumes
+    is already a projection: every overlapping 6-mer is scored and the windows
+    covering a position are aggregated. The fixture reproduces that geometry
+    rather than writing a flat per-residue score, because the geometry is what
+    downstream code has to cope with -- under the default `max` rule a single
+    positive hexamer raises all six of its residues, so a synthetic track built
+    residue-by-residue would not exercise the boundary broadening that makes
+    AmyloGram's APR extents differ from a true per-residue tool's.
+    """
+    window = 6
+    starts = range(1, max(1, length - window + 1) + 1)
+    peptide = {s: (0.88 if in_any(s + window // 2, win) else 0.18) for s in starts}
+    scores = [0.0] * length
+    for start, prob in peptide.items():
+        for offset in range(window):
+            idx = start - 1 + offset
+            if idx < length:
+                scores[idx] = max(scores[idx], prob)
+    rows = ["Number,Residue,Score"]
+    rows += [f"{i+1},{seq[i]},{scores[i]:.3f}" for i in range(length)]
+    path.write_text("\n".join(rows) + "\n")
+
+
 WRITERS = {
     "aggrescan": ("csv", write_aggrescan),
     "appnn": ("tsv", write_appnn),
@@ -143,6 +169,7 @@ WRITERS = {
     "aggreprot": ("csv", write_aggreprot),
     "crossbeta": ("json", write_crossbeta),
     "archcandy": ("csv", write_archcandy),
+    "amylogram": ("csv", write_amylogram),
 }
 
 

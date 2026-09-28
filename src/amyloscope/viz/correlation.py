@@ -48,24 +48,6 @@ from . import style as _style
 SUMMARIES = ("region_count", "moderate_band", "weak_band")
 
 
-def _fonts(viz) -> dict[str, float]:
-    """Explicit point sizes derived from the preset's base font.
-
-    Relative keywords ("small", "x-small") resolve against rcParams font.size,
-    which apply_style sets to the preset base — 9 pt for print but 20 pt for
-    poster. An annotation therefore renders at 17 pt on a poster run while the
-    number of characters in a category label stays the same, which is what made
-    the labels collide. Fixing the ratios here keeps the hierarchy intact across
-    presets while holding the annotation text near a readable absolute size.
-    """
-    base = getattr(viz, "resolved_base_font", 11.0)
-    return {
-        "title": base * 1.00,
-        "label": base * 0.90,
-        "tick": base * 0.78,
-        "point": base * 0.80,   # protein names on the scatter
-        "annot": base * 0.72,   # statistics block and bar values
-    }
 
 
 def _wrap(text: str, width: int = 20) -> str:
@@ -209,6 +191,7 @@ def plot_measurement_correlation(
     fs = getattr(viz, "resolved_figure_scale", 1.0)
 
     if len(ids) < 3:
+        fonts = _style.figure_fonts(viz, 8 * fs)
         fig, ax = plt.subplots(figsize=(8 * fs, 3 * fs), facecolor="white")
         ax.text(0.5, 0.5, tr("corr_too_few"), ha="center", va="center",
                 transform=ax.transAxes)
@@ -222,7 +205,6 @@ def plot_measurement_correlation(
     x = [all_summaries[summary][i] for i in ids]
     rho, p, floor, exact = exact_spearman_p(x, y)
 
-    fonts = _fonts(viz)
     two = len(all_summaries) > 1
 
     # Three columns: scatter, bar comparison, and a dedicated statistics panel
@@ -231,8 +213,12 @@ def plot_measurement_correlation(
     # proteins one of them is always at the y-limit. Giving the text its own
     # column is the same pattern the per-predictor track figure uses for its
     # summary boxes, so the reader meets one convention rather than two.
-    widths = [1.80, 1.55, 0.82] if two else [1.30, 0.62]
+    widths = [1.30, 1.05, 0.62] if two else [1.30, 0.62]
     figsize = figsize or (sum(widths) * 4.6 * fs, 5.0 * fs)
+    # Sizes come from the shared width-relative scale, resolved against this
+    # figure's actual width, so the type matches every other module once both
+    # are placed at a common column width.
+    fonts = _style.figure_fonts(viz, figsize[0])
     fig = plt.figure(figsize=figsize, facecolor="white")
     gs = fig.add_gridspec(1, len(widths), width_ratios=widths, wspace=0.32)
     ax = fig.add_subplot(gs[0, 0])
@@ -267,7 +253,7 @@ def plot_measurement_correlation(
     ax.set_xlabel(tr(f"corr_x_{summary}"), fontsize=fonts["label"])
     ax.set_ylabel(measurement_label or tr("corr_y_default"),
                   fontsize=fonts["label"])
-    ax.set_title(tr("corr_title"), pad=10, # fontweight="bold",
+    ax.set_title(tr("corr_title"), pad=10, #fontweight="bold",
                  fontsize=fonts["title"])
     ax.tick_params(labelsize=fonts["tick"])
     ax.grid(True, alpha=0.2, linestyle=":", linewidth=0.5)

@@ -83,7 +83,7 @@ def _apr_mask(df: pd.DataFrame, strategy: DetectionStrategy) -> pd.Series:
         # expanded, so it cannot accidentally swallow other tokens.
         if "true" in truthy:
             truthy |= _DEFAULT_TRUTHY
-        norm = series.map(_normalise_flag)
+        norm = series.map(_normalise_flag, na_action="ignore")
         return norm.isin(truthy)
     raise ValueError(f"unsupported detection method '{method}'")
 
