@@ -8,6 +8,8 @@ hardcoded ``main()`` in the original ``complete_analysis_pipeline.py``.
 
 from __future__ import annotations
 
+import copy
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -134,14 +136,49 @@ def _render_figures(dataset, result, stats, out_dir: Path, overlap=None,
     config = dataset.config
     written: list[str] = []
 
+    from .viz import paging as viz_paging
+
+    per_page = getattr(config.viz, "proteins_per_page", viz_paging.DEFAULT_PER_PAGE)
+
     def _save(fig, name: str) -> None:
         if fig is None:
             return
         written.extend(viz_style.save_figure(fig, out_dir / name, config.viz))
         plt.close(fig)
 
+    def _save_paged(build, name: str) -> None:
+        """Render a protein-stacked figure one page at a time.
+
+        ``build(page_result, page_dataset, page_stats)`` returns one figure. The
+        plotting functions are untouched: a page is a shallow view of the result
+        carrying a subset of proteins, so each one simply sees fewer. With the
+        protein count at or below ``per_page`` there is exactly one page and the
+        filename keeps its original form, so a small run is unchanged.
+
+        Without this, height scales as lane_step x n: a 372-protein run produced
+        a 4,604 x 377,859 px domain-architecture figure -- 1.74 gigapixels, past
+        Pillow's decompression-bomb guard and past what most viewers will open.
+        """
+        specs = list(config.proteins)
+        pages = viz_paging.chunk(specs, per_page)
+        by_id = {pt.spec.id: pt for pt in dataset}
+        rows = list(getattr(stats, "per_protein_positional", []) or [])
+        rows_by_id = {getattr(r, "protein", None): r for r in rows}
+        for i, page_specs in enumerate(pages):
+            ids = [s.id for s in page_specs]
+            page_result = viz_paging.page_view(result, page_specs)
+            page_dataset = [by_id[i_] for i_ in ids if i_ in by_id]
+            page_stats = copy.copy(stats)
+            if rows:
+                page_stats.per_protein_positional = [
+                    rows_by_id[i_] for i_ in ids if i_ in rows_by_id
+                ]
+            fig = build(page_result, page_dataset, page_stats)
+            _save(fig, viz_paging.page_name(name, i, len(pages)))
+
     # ---- panel-level figures ---------------------------------------------- #
-    _save(viz_consensus.plot_distribution(result), "consensus_distribution.png")
+    _save_paged(lambda r, d, st: viz_consensus.plot_distribution(r),
+                "consensus_distribution.png")
     # Rendered ONCE. The call was duplicated verbatim, so the figure was built
     # and written twice per run and appeared twice in `written` -- which made the
     # artifact list look like two different files and doubled the cost of the
@@ -151,15 +188,21 @@ def _render_figures(dataset, result, stats, out_dir: Path, overlap=None,
     # Per-protein positional breakdown: the panel-level enrichment pools every
     # protein, which hides whether a positional trend is shared or driven by one
     # chain. With a panel this small that distinction decides the interpretation.
-    _save(viz_per_protein.plot_per_protein_positional(result, stats),
-          "per_protein_positional.png")
+    _save_paged(
+        lambda r, d, st: viz_per_protein.plot_per_protein_positional(r, st),
+        "per_protein_positional.png")
     if clusters is not None:
         from .viz import clusters as viz_clusters
-        _save(viz_clusters.plot_cluster_cores(clusters, config), "apr_clusters.png")
+        # Clusters are paginated on their own count, not the protein count:
+        # 372 proteins produced 2,654 cluster lanes and a 334,802 px figure.
+        cl_pages = viz_paging.chunk(list(clusters), per_page * 4)
+        for i, page in enumerate(cl_pages):
+            _save(viz_clusters.plot_cluster_cores(page, config),
+                  viz_paging.page_name("apr_clusters.png", i, len(cl_pages)))
 
     if any(p.domains for p in config.proteins):
-        _save(viz_domains.plot_domain_architecture(result),
-              "domain_architecture.png")
+        _save_paged(lambda r, d, st: viz_domains.plot_domain_architecture(r),
+                    "domain_architecture.png")
 
     # The overlap figure takes the analysis object, not the ConsensusResult the
     # other builders take, because the enrichment null belongs to the analysis
@@ -185,10 +228,14 @@ def _render_figures(dataset, result, stats, out_dir: Path, overlap=None,
     if getattr(config.viz, "detailed", False) and any(
         pt.tracks for pt in dataset
     ):
-        _save(viz_detailed.plot_cross_protein_overview(result, dataset, config),
-              "all_proteins_consensus.png")
-        _save(viz_detailed.plot_all_proteins_agreement(result, dataset, config),
-              "all_protein_agreement.png")
+        _save_paged(
+            lambda r, d, st: viz_detailed.plot_cross_protein_overview(
+                r, d, r.config),
+            "all_proteins_consensus.png")
+        _save_paged(
+            lambda r, d, st: viz_detailed.plot_all_proteins_agreement(
+                r, d, r.config),
+            "all_protein_agreement.png")
 
     # ---- per-protein figures ---------------------------------------------- #
     for protein_tracks in dataset:

@@ -169,13 +169,39 @@ def domain_color(category: str, viz: VizConfig) -> str:
 
 
 def save_figure(fig, path, viz: VizConfig) -> list[str]:
-    """Save a figure as PNG (and SVG when configured); return written paths."""
+    """Save a figure as PNG (and SVG when configured); return written paths.
+
+    A last-resort size guard sits here, below pagination rather than instead of
+    it. A figure whose height grows with the protein count reaches 377,859
+    pixels on a 372-protein run: past Pillow's decompression-bomb limit, past
+    what most viewers open, and large enough that cropping it exhausts memory.
+    Paginating is the real fix (:mod:`amyloscope.viz.paging`); this only ensures
+    that whatever does reach the writer is a file that can be opened, and says
+    so rather than lowering resolution in silence.
+    """
+    import warnings
     from pathlib import Path
+
+    from . import paging as _paging
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     written = []
-    fig.savefig(path, dpi=viz.dpi, bbox_inches="tight", facecolor="white")
+
+    dpi = viz.dpi
+    size = _paging.oversized(fig, dpi)
+    if size is not None:
+        dpi = _paging.fit_dpi(fig, dpi)
+        warnings.warn(
+            f"{path.name}: figure is {size[0]} x {size[1]} px at {viz.dpi} dpi, "
+            f"beyond the {_paging.MAX_PIXELS_PER_AXIS} px budget -- saving at "
+            f"{dpi:.0f} dpi instead. This figure scales with the number of "
+            f"proteins; paginate it rather than relying on this guard.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    fig.savefig(path, dpi=dpi, bbox_inches="tight", facecolor="white")
     written.append(str(path))
     if viz.save_svg:
         svg = path.with_suffix(".svg")

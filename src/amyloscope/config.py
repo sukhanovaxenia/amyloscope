@@ -381,7 +381,14 @@ DEFAULT_DOMAIN_PALETTE: dict[str, str] = {
 class VizConfig:
     dpi: int = 300
     save_svg: bool = True
-    detailed: bool = False 
+    detailed: bool = False
+    #: Proteins per page in the figures that draw one lane per protein. Those
+    #: size themselves as ``lane_step * n``, so a 372-protein run produced a
+    #: 377,859-pixel-tall figure that Pillow refuses as a decompression bomb and
+    #: most viewers decline to open. Pages are written as ``<name>_001.png`` and
+    #: so on; at or below this count there is one page and the filename is
+    #: unchanged. Set to 0 to disable pagination and get the old behaviour.
+    proteins_per_page: int = 24
     font_family: str = "Arial"
     x_padding: int = 15
     language: str = "en"

@@ -29,11 +29,29 @@ and the reported number keep their meaning; only its significance now comes from
 the permutation distribution. Pseudoreplication (several regions from one protein
 are not independent) is handled by construction, because each region is relocated
 only within its own protein.
+
+What this null does NOT absorb is phylogenetic non-independence. Several hundred
+orthologues of one protein are not several hundred independent observations of
+anything: an APR inherited once and retained is counted in every descendant, so
+a pooled permutation p answers "is this arrangement unusual for proteins of these
+lengths", not "did this arise independently many times". For an orthologue sweep,
+report alongside it the fraction of INDIVIDUAL proteins whose own placement is
+shifted against their own null -- that is the number a phylogenetic objection
+cannot explain away, and ``terminal_bias`` in ``analysis/termini.py`` computes it.
+
+Placement itself is delegated to ``analysis.relocation``, shared with
+``analysis/domains.py``, so the two positional tests in this package rest on one
+sampler. The previous inline loop resampled each region until it missed the ones
+already placed, and on failure appended the last REJECTED position without
+recording it -- so a crowded protein could silently contribute overlapping
+regions, and every later region in it was sampled against a stale occupancy set.
 """
 
 from __future__ import annotations
 
 import numpy as np
+
+from .relocation import relocate_starts
 
 #: Matches domain_overlap.DEFAULT_DRAWS resolution.
 DEFAULT_DRAWS = 200_000
@@ -99,20 +117,15 @@ def positional_permutation_test(
         positions = []
         for p, ws in widths.items():
             length = lengths[p]
-            placed: set[int] = set()
-            for w in ws:
-                # Resample this region until it does not overlap the others in
-                # the same protein, matching domain_overlap's non-overlap null;
-                # observed consensus regions are themselves non-overlapping.
-                for _attempt in range(1000):
-                    start = int(rng.integers(1, length - w + 1)) if length - w >= 1 else 1
-                    residues = set(range(start, start + w + 1))
-                    if placed.isdisjoint(residues):
-                        placed |= residues
-                        positions.append(_normalized_midpoint(start, start + w, length))
-                        break
-                else:
-                    positions.append(_normalized_midpoint(start, start + w, length))
+            # `ws` holds e - s, one less than the region length; relocate_starts
+            # takes true lengths. This is the only place the two conventions
+            # meet, so the +1 lives here rather than inside the sampler.
+            region_lengths = np.asarray(ws, dtype=int) + 1
+            starts = relocate_starts(region_lengths, length, rng)
+            positions.extend(
+                _normalized_midpoint(int(s), int(s) + int(w), length)
+                for s, w in zip(starts, ws)
+            )
         counts = _decile_counts(np.array(positions))
         null_decile_sum += counts
         if _chi2_distance(counts) >= observed_stat - 1e-12:
