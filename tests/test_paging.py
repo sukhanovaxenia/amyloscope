@@ -171,3 +171,53 @@ def test_save_figure_warns_rather_than_writing_an_unopenable_file(tmp_path) -> N
             assert max(im.size) <= paging.MAX_PIXELS_PER_AXIS
     finally:
         plt.close(fig)
+
+
+# --------------------------------------------------------------------------- #
+# Cluster pagination
+# --------------------------------------------------------------------------- #
+@dataclass
+class FakeClusterResult:
+    clusters: dict = field(default_factory=dict)
+    breadth: dict = field(default_factory=dict)
+
+    def all_clusters(self):
+        return [c for cs in self.clusters.values() for c in cs]
+
+
+def test_cluster_pages_split_on_cluster_count_not_protein_count() -> None:
+    """A ClusterResult is not a list, and its figure scales with CLUSTERS.
+
+    Paginating it as if it were an iterable of clusters raised
+    `TypeError: 'ClusterResult' object is not iterable`; paginating it by
+    protein would still leave one page holding however many clusters those
+    proteins happen to carry.
+    """
+    res = FakeClusterResult(clusters={f"p{i}": [f"c{i}_{j}" for j in range(10)]
+                                      for i in range(10)})
+    pages = list(paging.cluster_pages(res, 24))
+    assert len(pages) == 5
+    assert {total for _, _, total in pages} == {5}
+    assert all(len(page.all_clusters()) <= 24 for page, _, _ in pages)
+
+
+def test_cluster_pages_preserve_every_cluster_in_order() -> None:
+    res = FakeClusterResult(clusters={"a": ["a1", "a2", "a3"], "b": ["b1", "b2"]})
+    seen = [c for page, _, _ in paging.cluster_pages(res, 2)
+            for c in page.all_clusters()]
+    assert seen == ["a1", "a2", "a3", "b1", "b2"]
+
+
+def test_cluster_pages_keep_per_protein_grouping() -> None:
+    res = FakeClusterResult(clusters={"a": ["a1", "a2"], "b": ["b1", "b2"]})
+    first = next(iter(paging.cluster_pages(res, 3)))[0]
+    assert set(first.clusters) == {"a", "b"}
+    assert first.clusters["a"] == ["a1", "a2"]
+    assert first.clusters["b"] == ["b1"]
+
+
+def test_small_cluster_set_is_one_page_with_the_original_name() -> None:
+    res = FakeClusterResult(clusters={"a": ["a1", "a2"]})
+    pages = list(paging.cluster_pages(res, 24))
+    assert len(pages) == 1
+    assert paging.page_name("apr_clusters.png", 0, 1) == "apr_clusters.png"

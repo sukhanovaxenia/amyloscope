@@ -571,6 +571,73 @@ def _build_protein(raw: dict[str, Any]) -> ProteinSpec:
         raise ConfigError(f"protein entry missing required key {exc}") from exc
 
 
+def _apply_metadata_labels(
+    proteins: list[ProteinSpec], raw: dict[str, Any] | None, config_path: Path
+) -> None:
+    """Fill ``display_name`` from a metadata table, when one is configured.
+
+    For a handful of proteins the config carries the names directly and this
+    does nothing. For a sweep it is the only workable route: 372 accessions
+    cannot be hand-named, and an axis of accessions makes a reader do a lookup
+    per row. See :mod:`amyloscope.io.metadata` for the labelling policy, which
+    is deliberate rather than cosmetic.
+
+    A protein with an explicit ``display_name`` keeps it -- a name in the config
+    is a statement, and a table does not silently overrule it.
+    """
+    if not raw:
+        return
+    from .io.metadata import MetadataError, load_labels
+
+    table = raw.get("table") or raw.get("path")
+    if not table:
+        raise ConfigError(
+            "labels: needs a 'table' naming a metadata TSV with an 'id' column "
+            "matching the protein ids. Drop the whole 'labels' section to keep "
+            "using display_name from this file."
+        )
+    table_path = Path(table)
+    if not table_path.is_absolute():
+        table_path = (config_path.parent / table_path).resolve()
+
+    try:
+        labels, collisions = load_labels(
+            table_path,
+            template=raw.get("template", "{tax_name} {group}"),
+            id_column=raw.get("id_column", "id"),
+            delimiter=raw.get("delimiter"),
+        )
+    except MetadataError as exc:
+        raise ConfigError(f"labels: {exc}") from exc
+
+    from .io.metadata import apply_labels
+
+    labelled, missing = apply_labels(proteins, labels)
+    if missing and raw.get("require_all"):
+        shown = ", ".join(missing[:5])
+        raise ConfigError(
+            f"labels: {len(missing)} of {len(proteins)} protein(s) have no row "
+            f"in {table_path.name} ({shown}"
+            f"{', ...' if len(missing) > 5 else ''}). With require_all those "
+            f"would be labelled by accession while their neighbours carry "
+            f"species names, which is the one axis worse than all accessions."
+        )
+    _LABEL_SUMMARY.update(
+        {"labelled": labelled, "unlabelled": len(missing),
+         "disambiguated": collisions, "table": str(table_path)}
+    )
+
+
+#: Filled by :func:`_apply_metadata_labels` so the pipeline can report what the
+#: labelling did without reading the table a second time.
+_LABEL_SUMMARY: dict[str, Any] = {}
+
+
+def label_summary() -> dict[str, Any]:
+    """What the last config load's metadata labelling did, for the run report."""
+    return dict(_LABEL_SUMMARY)
+
+
 def _build_consensus(raw: dict[str, Any] | None) -> ConsensusConfig:
     if not raw:
         return ConsensusConfig()
@@ -803,6 +870,7 @@ def load_config(path: str | Path) -> PipelineConfig:
         raise ConfigError(f"{path}: top-level YAML must be a mapping")
 
     proteins = [_build_protein(p) for p in raw.get("proteins", [])]
+    _apply_metadata_labels(proteins, raw.get("labels"), path)
     cfg = PipelineConfig(
         name=raw.get("name", path.stem),
         proteins=proteins,

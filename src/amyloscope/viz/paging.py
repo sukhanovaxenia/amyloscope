@@ -89,6 +89,27 @@ def protein_pages(result, per_page: int = DEFAULT_PER_PAGE):
         yield page_view(result, specs), i, len(pages)
 
 
+def cluster_pages(result, per_page: int):
+    """Split a ``ClusterResult`` into pages of at most ``per_page`` clusters.
+
+    Clusters are paginated on their OWN count rather than the protein count,
+    because the cluster figure draws one lane per cluster and a protein
+    contributes however many it has: 372 proteins produced 2,654 lanes and a
+    334,802-pixel figure. Per-protein grouping is preserved inside each page, so
+    a page still reads protein by protein.
+
+    Yields ``(page_result, index, total)``. ``plot_cluster_cores`` reads only
+    ``all_clusters()``, so a page is the same type with a smaller mapping.
+    """
+    flat = [(pid, c) for pid, cs in result.clusters.items() for c in cs]
+    pages = chunk(flat, per_page)
+    for i, page in enumerate(pages):
+        grouped: dict[str, list] = {}
+        for pid, c in page:
+            grouped.setdefault(pid, []).append(c)
+        yield replace(result, clusters=grouped), i, len(pages)
+
+
 def oversized(fig, dpi: float) -> tuple[int, int] | None:
     """Pixel dimensions if the figure exceeds the axis budget, else ``None``."""
     w_in, h_in = fig.get_size_inches()

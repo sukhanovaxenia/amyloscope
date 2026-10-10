@@ -194,11 +194,11 @@ def _render_figures(dataset, result, stats, out_dir: Path, overlap=None,
     if clusters is not None:
         from .viz import clusters as viz_clusters
         # Clusters are paginated on their own count, not the protein count:
-        # 372 proteins produced 2,654 cluster lanes and a 334,802 px figure.
-        cl_pages = viz_paging.chunk(list(clusters), per_page * 4)
-        for i, page in enumerate(cl_pages):
+        # the figure draws one lane per cluster, and 372 proteins produced
+        # 2,654 of them in a 334,802 px image.
+        for page, i, total in viz_paging.cluster_pages(clusters, per_page * 4):
             _save(viz_clusters.plot_cluster_cores(page, config),
-                  viz_paging.page_name("apr_clusters.png", i, len(cl_pages)))
+                  viz_paging.page_name("apr_clusters.png", i, total))
 
     if any(p.domains for p in config.proteins):
         _save_paged(lambda r, d, st: viz_domains.plot_domain_architecture(r),

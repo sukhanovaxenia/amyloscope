@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .multiple import benjamini_hochberg, n_discoveries
 from .relocation import relocate_starts
 
 #: Pooled draws. Resolves a p to 1/(draws+1); the pooled p is reported with that
@@ -88,6 +89,10 @@ class ProteinTerminalBias:
     observed_distance: float
     null_distance: float
     p_position: float
+    #: BH-adjusted p across the per-protein family. NaN until terminal_bias()
+    #: fills it, which it always does -- the field exists so a single protein's
+    #: p is never read without the correction beside it.
+    q_position: float = float("nan")
 
     @property
     def position_shift(self) -> float:
@@ -128,6 +133,8 @@ class TerminalBiasResult:
     per_protein: list[ProteinTerminalBias] = field(default_factory=list)
     length_correlation: float = float("nan")
     length_correlation_p: float = float("nan")
+    #: FDR level the per-protein q-values were counted at.
+    fdr_alpha: float = 0.05
 
     @property
     def pooled_shift(self) -> float:
@@ -135,7 +142,37 @@ class TerminalBiasResult:
 
     @property
     def n_shifted(self) -> int:
-        return sum(1 for e in self.per_protein if e.is_n_shifted)
+        """Proteins shifted towards the N-terminus. Ties are not counted."""
+        return sum(1 for e in self.per_protein if e.position_shift < 0)
+
+    @property
+    def n_directional(self) -> int:
+        """Proteins with a direction at all, i.e. excluding exact ties."""
+        return sum(1 for e in self.per_protein if e.position_shift != 0)
+
+    @property
+    def sign_test_p(self) -> float:
+        """Two-sided binomial sign test on the per-protein DIRECTIONS.
+
+        This is what turns the replication count into a statistic. Under each
+        protein's own null its observed mean position is as likely to fall above
+        the null mean as below, so the directions are Bernoulli(0.5) and 91 out
+        of 91 pointing one way is not a tally but a test -- and one that needs no
+        per-protein significance, which is the point: a protein carrying four
+        APRs can be unambiguously N-shifted while having far too few regions for
+        its own permutation test to resolve.
+
+        The phylogenetic caveat applies to this p and not to the count: shared
+        ancestry means the 91 draws are not independent, so read it as "the
+        direction is consistent", never as 2^-91 worth of evidence.
+        """
+        from scipy import stats as _stats
+
+        n = self.n_directional
+        if n == 0:
+            return float("nan")
+        k = self.n_shifted
+        return float(_stats.binomtest(k, n, 0.5).pvalue)
 
     @property
     def fraction_n_shifted(self) -> float:
@@ -145,6 +182,24 @@ class TerminalBiasResult:
     def p_floor(self) -> float:
         """The smallest p this draw count can express."""
         return 1.0 / (self.draws + 1)
+
+    @property
+    def n_significant(self) -> int:
+        """Proteins individually significant after BH correction."""
+        return n_discoveries([e.q_position for e in self.per_protein],
+                             self.fdr_alpha)
+
+    @property
+    def per_protein_p_floor(self) -> float:
+        """The smallest p a per-protein test can express.
+
+        Worth printing beside the discovery count: with 300 draws the floor is
+        1/301, so after BH over several hundred proteins the smallest reachable
+        q is bounded from below by the draw count rather than by the data. A
+        count of zero discoveries can therefore mean "not enough draws" rather
+        than "no effect", and the two are not distinguishable from the q-values.
+        """
+        return 1.0 / (self.per_protein_draws + 1)
 
 
 def _empirical_p(null: np.ndarray, observed: float) -> float:
@@ -162,6 +217,7 @@ def terminal_bias(
     per_protein_draws: int = DEFAULT_PER_PROTEIN_DRAWS,
     seed: int = 0,
     min_length: int | None = None,
+    fdr_alpha: float = 0.05,
 ) -> TerminalBiasResult:
     """Terminal bias, pooled and per protein.
 
@@ -179,6 +235,7 @@ def terminal_bias(
         return TerminalBiasResult(
             n_proteins=0, n_regions=0, length_range=(0, 0),
             draws=draws, per_protein_draws=per_protein_draws,
+            fdr_alpha=fdr_alpha,
         )
 
     widths = {p: np.array([e - s + 1 for s, e in regs], dtype=int)
@@ -229,6 +286,7 @@ def terminal_bias(
         n_tertile=float((obs_pos < 1 / 3).mean()),
         mid_tertile=float(((obs_pos >= 1 / 3) & (obs_pos <= 2 / 3)).mean()),
         c_tertile=float((obs_pos > 2 / 3).mean()),
+        fdr_alpha=fdr_alpha,
     )
 
     # Per protein, against its OWN null. This is the replication count.
@@ -256,6 +314,18 @@ def terminal_bias(
             null_distance=float(np_dist.mean()),
             p_position=_empirical_p(np_pos, float(o_pos)),
         ))
+
+    # One test per protein is one FAMILY of tests, and reporting any single
+    # protein's p without correcting it invites reading the smallest of several
+    # hundred as though it stood alone. BH rather than Holm: the question is how
+    # many proteins show the effect, which is an estimation question about the
+    # set, and at n in the hundreds Holm's family-wise bound would return almost
+    # nothing from a real and uniform effect.
+    for entry, q in zip(
+        result.per_protein,
+        benjamini_hochberg([e.p_position for e in result.per_protein]),
+    ):
+        entry.q_position = float(q)
 
     # Length confound: does a protein's mean APR position track its length?
     # Skipped when every chain is the same length -- the correlation is then
@@ -289,11 +359,32 @@ def format_terminal_report(result: TerminalBiasResult) -> str:
         "",
         "REPLICATION ACROSS PROTEINS  (the number phylogeny cannot explain away)",
         "-" * 70,
-        f"  {result.n_shifted} of {len(result.per_protein)} proteins "
-        f"({result.fraction_n_shifted:.1%}) are shifted towards the N-terminus",
-        f"  relative to their OWN null. Several hundred orthologues are not",
-        f"  several hundred independent observations, so this count -- not the",
-        f"  pooled p below -- is what belongs in a Methods section.",
+        f"  DIRECTION  {result.n_shifted} of {result.n_directional} proteins "
+        f"({result.fraction_n_shifted:.1%}) lie towards the "
+        f"{'N' if result.pooled_shift < 0 else 'C'}-terminus",
+        f"             relative to their OWN null. Sign test on those "
+        f"directions: p = {result.sign_test_p:.2g}.",
+        "",
+        f"  INDIVIDUALLY  {result.n_significant} of {len(result.per_protein)} "
+        f"reach significance at FDR {result.fdr_alpha:g} (Benjamini-Hochberg",
+        f"             over the {len(result.per_protein)} per-protein tests).",
+        "",
+        "  These two answer different questions and routinely disagree. A",
+        "  protein carrying four APRs can be unambiguously shifted while having",
+        "  far too few regions for its own permutation test to resolve -- so a",
+        "  unanimous direction alongside almost no individual significance is",
+        "  the expected shape of a real, weak-per-protein effect, not a",
+        f"  contradiction. The per-protein p floor is "
+        f"{result.per_protein_p_floor:.2g} at "
+        f"{result.per_protein_draws:,} draws; if the",
+        "  discovery count is low, raise per_protein_draws before concluding",
+        "  there is nothing there.",
+        "",
+        "  Neither number addresses phylogeny. These proteins share ancestry, so",
+        "  the sign test's draws are not independent and no p-value adjustment",
+        "  makes them so: read it as 'the direction is consistent', never as",
+        "  2^-n worth of evidence. BH controls false discoveries among the",
+        "  tests; it does not buy independence.",
         "",
         "POOLED",
         "-" * 70,

@@ -250,11 +250,54 @@ def parse_aggrescan(path: Path, sequence: str) -> pd.DataFrame:
 
 @register_adapter("appnn")
 def parse_appnn(path: Path, sequence: str) -> pd.DataFrame:
-    """APPNN TSV. Hotspot residues flagged by the boolean ``is_hotspot``."""
-    df = pd.read_csv(path, sep="\t", header=0)
-    df = df.drop(columns=[c for c in ("overall", "id") if c in df.columns])
-    df.columns = ["Number", "Residue", "Score", "is_hotspot"]
-    return _finalise(df, path)
+    """APPNN export → normalised track. Hotspots in the boolean ``is_hotspot``.
+
+    Columns are resolved by NAME. The previous implementation dropped two known
+    columns and then assigned ``df.columns = [...]`` positionally, which is the
+    one failure mode this module's docstring says was eliminated everywhere
+    else -- it was the last adapter still doing it, and it fails in the quietest
+    possible way. A file with ``score`` and ``is_hotspot`` transposed yields
+    ``Score`` holding False/True and ``is_hotspot`` holding 0.15/0.85;
+    ``_finalise`` coerces those booleans to 0.0/1.0 without complaint, and a
+    config with ``detection: {method: flag, column: is_hotspot}`` then matches
+    nothing. APPNN silently calls zero residues, and a panel quietly missing a
+    voter changes every fractional tier beneath it.
+
+    The hardcoded ``sep="\\t"`` was the second half of the problem: this
+    project's own ``appnn_converter.R`` writes COMMA-separated output
+    (``sequence_name,aminoacid_position,aminoacid,aminoacid_score,hotspot_region``),
+    which raised ``Length mismatch: Expected axis has 1 elements`` -- downgraded
+    by the loader to a warning, so the tool simply vanished from the panel.
+    ``_read_table`` sniffs the delimiter, as every sibling adapter does.
+    """
+    df = _read_table(path)
+    number = _pick(
+        df,
+        ("Number", "aminoacid_position", "Position", "Num", "position"),
+        source=path,
+        what="residue index",
+    )
+    residue = _pick(
+        df,
+        ("Residue", "aminoacid", "AA", "Res", "aa_name"),
+        source=path,
+        what="residue identity",
+    )
+    score = _pick(
+        df,
+        ("Score", "aminoacid_score", "APPNN_score", "score"),
+        source=path,
+        what="APPNN score",
+    )
+    out = pd.DataFrame(
+        {"Number": df[number], "Residue": df[residue], "Score": df[score]}
+    )
+    flag = _optional(
+        df, ("is_hotspot", "hotspot_region", "hotspot", "HotSpot", "Prediction")
+    )
+    if flag is not None:
+        out["is_hotspot"] = _truthy(df[flag])
+    return _finalise(out, path)
 
 
 @register_adapter("foldamyloid")
@@ -1024,4 +1067,126 @@ def parse_amylogram(
             f"AmyloGram's projection must cover the whole chain; a length "
             f"mismatch means the window table and the sequence disagree."
         )
+    return _finalise(out, path)
+
+#: Spellings of "called" accepted in a flag column, matching
+#: ``core.regions._DEFAULT_TRUTHY`` so the two paths agree on what a flag means.
+_TRUTHY_TOKENS = frozenset({"true", "t", "yes", "y", "1", "1.0"})
+
+
+def _truthy(column: pd.Series) -> pd.Series:
+    """Boolean call from a flag column, whatever dtype it arrived in.
+
+    Branching on ``column.dtype == object`` is not safe. pandas 3 infers a
+    ``str`` dtype for text columns rather than ``object``, so that test is False
+    for a perfectly ordinary CSV of ``yes``/``no``; the numeric branch then
+    coerces every value to NaN, fills it with 0, and returns all-False. The
+    failure is silent, it depends on the installed pandas, and "this tool called
+    nothing" is exactly the shape of wrongness that survives review -- it looks
+    like a predictor that simply found no APRs.
+
+    Numeric columns are compared with > 0.5 as before; everything else is
+    normalised to a lowercase token and matched against ``_TRUTHY_TOKENS``.
+    Booleans go through the string path, where they spell ``true``/``false``.
+    """
+    if pd.api.types.is_bool_dtype(column):
+        return column.astype(bool)
+    if pd.api.types.is_numeric_dtype(column):
+        return pd.to_numeric(column, errors="coerce").fillna(0).astype(float) > 0.5
+    text = column.astype(str).str.strip().str.lower()
+    matched = text.isin(_TRUTHY_TOKENS)
+    # A column of digits stored as text ("0"/"1") is numeric in intent.
+    numeric = pd.to_numeric(text, errors="coerce")
+    return (matched | (numeric.fillna(0).astype(float) > 0.5)).astype(bool)
+
+
+@register_adapter("aggressor")
+def parse_aggressor(
+    path: Path,
+    sequence: str,
+    *,
+    threshold: float = 0.5,
+) -> pd.DataFrame:
+    """A track already normalised by ``aggressor-wrappers``.
+
+    Every other adapter here parses one tool's native export. This one parses the
+    output of the *execution layer*, and exists because that layer has already done
+    the per-tool work: it ran the predictor, read whatever shape that tool emits,
+    and binarised it with that tool's own threshold **and direction**. PASTA's
+    pairing energy is amyloidogenic when LOW, so a bare ``Score >= cut`` on the far
+    side would invert it; AGGRESCAN's Hot Spots come from NHSA rather than from the
+    a4v profile; WALTZ's cut is on a 0-100 scale while APPNN's is on 0-1.
+
+    So what crosses the boundary is the CALL, in the ``APR`` column, and the
+    detection strategy for this adapter is ``flag`` rather than a threshold. None of
+    those per-tool rules has to be restated in an amyloscope config, and none of
+    them can drift between the two packages -- which is the point of having an
+    execution layer at all.
+
+    Expected columns: ``Number`` (1-based), ``Residue``, ``Score`` (the tool's own
+    native scale, carried through for plotting), and ``APR`` (boolean call). ``APR``
+    is required: a track without it would silently become a tool that called
+    nothing, and a panel quietly missing one voter changes every fractional tier
+    beneath it. ``Score`` without ``APR`` is a normalisation that lost its
+    conclusion, so it is an error rather than a default.
+
+    Detection: ``flag`` on ``APR``. ``threshold`` is accepted only so this adapter
+    has the same signature as the others, and is used solely if the file carries
+    ``Score`` but no ``APR`` -- which, per the previous paragraph, raises first.
+    """
+    df = _read_table(path)
+    number = _pick(
+        df, ("Number", "Position", "Num"), source=path, what="residue index"
+    )
+    score = _pick(df, ("Score", "score"), source=path, what="score")
+    residue = _optional(df, ("Residue", "AA", "Res"))
+
+    flag = _optional(df, ("APR", "apr", "bin", "call"))
+    if flag is None:
+        raise AdapterError(
+            f"{path}: no APR column (have {list(df.columns)}). A track exported by "
+            f"aggressor-wrappers carries the binarised call, made with that tool's "
+            f"own threshold and direction; reading the Score column with a generic "
+            f"cut would invert an inverted-scale tool such as PASTA and would "
+            f"restate every per-tool rule on this side. Re-export with "
+            f"`aggressor-export-amyloscope`, which always writes APR."
+        )
+
+    values = pd.to_numeric(df[score], errors="coerce")
+    calls = _truthy(df[flag])
+
+    positions = pd.to_numeric(df[number], errors="coerce")
+    if sequence and len(df) != len(sequence):
+        raise AdapterError(
+            f"{path}: the track has {len(df)} positions but the configured sequence "
+            f"has {len(sequence)} residues. One of the two is not this protein -- "
+            f"most often the config was built from a different FASTA than the run, "
+            f"or a duplicate header in the FASTA replaced one record with another of "
+            f"a different length. Compare the track's Residue column against the "
+            f"configured sequence before trusting either."
+        )
+
+    out = pd.DataFrame(
+        {
+            "Number": positions.astype(int),
+            "Residue": df[residue] if residue else list(sequence)[: len(df)],
+            "Score": values,
+            "APR": calls.astype(int),
+        }
+    )
+    # Provenance the execution layer may have attached. Carried, never required:
+    # window_size and aggregate say how far a boundary can be trusted, and
+    # heads_used flags an ensemble that ran short.
+    for column in (
+        "window_size",
+        "coverage_depth",
+        "heads_used",
+        "window_min",
+        "window_max",
+        "window_std",
+    ):
+        if column in df.columns:
+            out[column] = pd.to_numeric(df[column], errors="coerce")
+    if "aggregate" in df.columns:
+        out["aggregate"] = df["aggregate"].astype(str)
     return _finalise(out, path)

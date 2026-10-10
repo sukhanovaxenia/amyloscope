@@ -149,3 +149,69 @@ def test_report_leads_with_replication() -> None:
     res = terminal_bias(regions, lengths, draws=200, per_protein_draws=50, seed=0)
     text = format_terminal_report(res)
     assert text.index("REPLICATION ACROSS PROTEINS") < text.index("POOLED")
+
+
+# --------------------------------------------------------------------------- #
+# Multiple-comparison correction, and the two numbers it separates
+# --------------------------------------------------------------------------- #
+def test_q_values_are_filled_and_at_least_the_raw_p() -> None:
+    regions, lengths = _uniformish(30, 600, [20, 60, 100])
+    res = terminal_bias(regions, lengths, draws=200, per_protein_draws=200, seed=0)
+    assert all(np.isfinite(e.q_position) for e in res.per_protein)
+    assert all(e.q_position >= e.p_position - 1e-12 for e in res.per_protein)
+
+
+def test_correction_is_over_the_whole_per_protein_family() -> None:
+    """More proteins, same per-protein evidence => weaker individual q-values."""
+    few, lf = _uniformish(5, 600, [20, 60, 100])
+    many, lm = _uniformish(80, 600, [20, 60, 100])
+    q_few = min(e.q_position for e in
+                terminal_bias(few, lf, draws=200, per_protein_draws=400,
+                              seed=0).per_protein)
+    q_many = min(e.q_position for e in
+                 terminal_bias(many, lm, draws=200, per_protein_draws=400,
+                               seed=0).per_protein)
+    assert q_many >= q_few
+
+
+def test_direction_and_individual_significance_are_separate_claims() -> None:
+    """The FXR1 shape: unanimous direction, little individual significance.
+
+    Three regions give a per-protein permutation test very little resolution,
+    so almost nothing survives FDR while every protein still points the same
+    way. Reporting only the discovery count would lose the effect; reporting
+    only the count of shifted proteins would overstate each one.
+    """
+    regions, lengths = _uniformish(40, 600, [120, 160, 200])
+    res = terminal_bias(regions, lengths, draws=200, per_protein_draws=200, seed=0)
+    assert res.n_shifted == res.n_directional == 40
+    assert res.sign_test_p < 1e-9
+    assert res.n_significant <= res.n_shifted
+
+
+def test_sign_test_sees_no_direction_when_there_is_none() -> None:
+    regions, lengths = {}, {}
+    for i in range(40):
+        regions[f"p{i}"] = [(20, 27)] if i % 2 else [(570, 577)]
+        lengths[f"p{i}"] = 600
+    res = terminal_bias(regions, lengths, draws=200, per_protein_draws=100, seed=0)
+    assert res.n_shifted == 20
+    assert res.sign_test_p > 0.5
+
+
+def test_ties_are_excluded_from_the_sign_test() -> None:
+    regions, lengths = _uniformish(10, 600, [20])
+    res = terminal_bias(regions, lengths, draws=100, per_protein_draws=100, seed=0)
+    assert res.n_directional <= len(res.per_protein)
+    assert res.n_shifted <= res.n_directional
+
+
+def test_report_states_both_numbers_and_the_p_floor() -> None:
+    regions, lengths = _uniformish(20, 600, [20, 60])
+    res = terminal_bias(regions, lengths, draws=200, per_protein_draws=150, seed=0)
+    text = format_terminal_report(res)
+    assert "DIRECTION" in text and "INDIVIDUALLY" in text
+    assert "Sign test" in text
+    assert "Benjamini-Hochberg" in text
+    assert "per-protein p floor" in text
+    assert "phylogen" in text.lower()

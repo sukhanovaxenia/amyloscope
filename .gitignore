@@ -33,4 +33,5 @@ examples/*/data/
 .vscode/
 
 # Log commits
-CHANGELOG.txt
+CHANGELOG*
+COMMITMESSAGE*

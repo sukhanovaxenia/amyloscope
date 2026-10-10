@@ -1,201 +1,385 @@
-feat(analysis): adjudicate overlapping APR tiers and panel independence
+feat(analysis,io): FDR-adjust per-protein tests; label figures by species
 
-Two questions the pipeline could not previously answer, plus the adapter work
-needed to feed them.
+Everything currently uncommitted in this tree, as one message. Four concerns,
+separated by the numbered sections below; if you would rather land them
+separately, the natural cut is 1 | 2 | 3+4 and each section stands alone as its
+own message.
 
-The first is what to do when a moderate-tier region overlaps a narrower strong
-or unanimous one. Promoting the whole overlapping pattern to the higher tier is
-tempting and wrong: the shoulder may be real extension, or it may be the window
-width of whichever predictor is widest. Cross-Beta scores 15-residue windows, so
-it cannot resolve a nucleation core, a steric zipper or a gatekeeper, and it
-reaches into flanks that narrower models never call. The pipeline now reports
-core and extent separately and names which of the two readings the data supports.
+  1. multiple comparisons on the per-protein terminal-bias tests
+     analysis/multiple.py, analysis/termini.py, tests/{test_multiple,test_termini}.py
+  2. figure labels from a metadata table
+     io/metadata.py, config.py, tests/test_metadata_labels.py
+  3. the `aggressor` adapter, and two defects in its neighbours
+     io/adapters.py, tests/test_adapters_aggressor.py
+  4. cluster figures paginated on their own count
+     viz/paging.py, pipeline.py, tests/test_paging.py
 
-The second is whether a fractional consensus means what it says. Reading
-agreement as converging evidence is valid only while the models are
-mechanistically independent, and some published tools are built ON others.
 
-analysis/clusters.py  (new)
+================================================================================
+1. MULTIPLE COMPARISONS
+================================================================================
 
-  Clusters overlapping regions at residue resolution and reports, per cluster,
-  the extent (the called region) and the core (peak agreement inside it), never
-  a single promoted tier. The verdict comes from predictor breadth: whether the
-  narrow callers reach into the shoulder, or only the wide ones do.
+  src/amyloscope/analysis/multiple.py   (new)
 
-  measure_breadth() / classify_breadth() give the called fraction per predictor,
-  which is the discriminator. On the ribosomal panel: Cross-Beta 42.0 %,
-  Aggrescan 28.3 %, ArchCandy 27.5 %, APPNN 22.4 %, PASTA2 19.3 %, FoldAmyloid
-  16.4 %, AggreProt 14.2 %, TANGO 7.3 %, Waltz 4.4 %. Verdicts are
-  no_shoulder / extension_supported / window_artifact / ambiguous.
+    benjamini_hochberg()   step-up FDR control (BH 1995)
+    holm()                 step-down FWER control
+    n_discoveries()
 
-  On the real data the answer was usually "extension supported": RPS2 80-86
-  (moderate) contains a strong IYLF core at 81-84, RPS2 126-131 (strong)
-  contains a unanimous AFVA core at 126-129, RPS2 153-163 contains a strong
-  AIILA core at 154-158 -- and in each the narrow callers (Waltz 4.4 %,
-  TANGO 7.3 %, AggreProt 14.2 %) are present in the shoulders, so the widening
-  is not Cross-Beta's window alone.
+Validated against scipy.stats.false_discovery_control over 300 random families,
+agreeing to 2.2e-16. Validated against the library rather than against values
+written down from memory: a hand-copied expected column is exactly as likely to
+be wrong as the code it checks, and the first draft of this message quoted a
+reference value that was wrong while the implementation was right.
 
-analysis/independence.py  (new)
+NaNs pass through without entering the denominator. A test that could not be run
+is not a test that failed to reject, and counting it in m penalises every other
+test in the family for a comparison that never happened.
 
-  Declares the derivations (amyloid_predict -> TANGO + WALTZ; ST-ARCH ->
-  ArchCandy; TAPASS -> ArchCandy + TANGO + PASTA) and warns when a derived tool
-  is enabled alongside a tool it is built on, because the panel then counts one
-  line of evidence twice and every tier above it is inflated. Reports
-  effective_panel_size next to the configured one.
+BH rather than Holm for the per-protein family: the question there is "which of
+these proteins show the effect", and controlling the false discovery rate is the
+right error to control for a screen of a few hundred. Holm is provided for the
+smaller families -- a handful of ranks, a handful of domains -- where a
+family-wise rate is the right choice and the power cost is affordable. A test
+pins that Holm is never less conservative than BH, since if it ever looked
+cheaper something would be badly wrong.
 
-  It also measures what is not declared. pairwise_overlap() computes Jaccard,
-  containment and a breadth ratio per pair, which flagged APPNN/AggreProt
-  (jaccard 0.503, containment 0.861, breadth ratio 0.635) -- consistent with a
-  shared training signal neither paper declares. Reported as a flag for the
-  reader, not as a derivation.
 
-analysis/per_protein.py, analysis/positional_permutation.py  (new)
+  src/amyloscope/analysis/termini.py
 
-  The panel-level tests pool every protein's regions before testing, which gains
-  power for one directional question and hides two things that are often the
-  actual biology: which proteins carry the signal, and whether any of them point
-  the other way. per_protein_positional() and per_protein_domain_enrichment()
-  test within protein, Holm-corrected across proteins.
+    ProteinTerminalBias.q_position    BH-adjusted p, per protein
+    TerminalBiasResult.fdr_alpha      the threshold the counts are reported at
+    TerminalBiasResult.n_significant  proteins significant AFTER adjustment
+    TerminalBiasResult.n_directional  proteins with a usable direction
+    TerminalBiasResult.sign_test_p    exact binomial test on the directions
+    per_protein_p_floor               the smallest p this design can produce
 
-  positional_permutation_test() replaces the decile chi-square against a flat
-  len(positions)/10 expectation. That expectation was wrong twice over: it
-  ignores that regions have length and that proteins have different lengths, and
-  it was underpowered wherever a decile held fewer than five regions. The
-  permutation null is the one already used for domain overlap -- whole regions
-  relocated uniformly within their own protein, lengths preserved, Phipson &
-  Smyth +1 correction -- so positional and domain enrichment are now tested
-  against the same null instead of two incompatible ones.
+The adjustment changes what the analysis can claim, and the interesting part is
+that it does not weaken the result -- it separates two results that were being
+reported as one.
 
-io/adapters.py
+On the FXR1 set:
 
-  Rewritten around a shared _read_table() that sniffs delimiter and encoding and
-  honours comment rows, plus _pick()/_optional() for name-based column lookup,
-  so a semicolon export or a BOM no longer silently yields one column.
+    direction      91 of 91 proteins shift N-terminal
+                   sign test p = 8.1e-28
+    individually   0 of 91 proteins significant at FDR 0.05
 
-  AGGRESCAN: is_hotspot comes from the tool's own marker column, and from
-  NHSA > 0 when a file has none -- hand-scraped exports carry the six data
-  columns and no flag, and without the fallback they loaded with no hot spots at
-  all, which reads downstream as AGGRESCAN abstaining rather than as a missing
-  column. HSA is NOT interchangeable with NHSA: AGGRESCAN assigns shared area
-  before applying its run-length requirement, so Abeta42's isolated Y10 carries
-  HSA 0.122 while NHSA is 0.
+Both are true and they answer different questions. Each protein carries about
+four APRs, so the smallest p a per-protein permutation test can return is
+bounded well above any FDR threshold -- the per-protein family can be entirely
+null while the pooled direction is unanimous. That is a statement about the
+power of a four-observation test, not about the biology.
 
-  _clean_flag() fixes a phantom APR: the historical AGGRESCAN CSVs carry
-  non-breaking spaces (0xCA, Mac Roman, carried out of the result HTML by a
-  copy-paste), which `notnull` on the raw Prediction column read as a call.
+What would have been wrong is either half alone. Reporting 91/91 and an
+unadjusted per-protein table invites "and 37 of them are individually
+significant", which multiplicity would have removed. Reporting only the adjusted
+count invites "no protein shows the effect", which the unanimous direction
+contradicts. format_terminal_report() now leads with DIRECTION and then
+INDIVIDUALLY, in that order, and states the p-floor so a reader can see why the
+second number is zero.
 
-  FoldAmyloid: reads the long-result window and skips its "---------" separator
-  row rather than letting it become a residue.
+The direction test is a sign test on the directions rather than anything
+fancier, because that is the question: the pooled shift could be driven by a few
+proteins with large effects, and the sign test asks whether the effect is
+general. 91/91 says it is.
 
-  Cross-Beta: handles 0-based `index`, `mean_confidence` and AR_list -> in_AR.
 
-  ArchCandy: one _archcandy_track()/_archcandy_spans() pair now serves
-  archcandy, archcandy2 and archcandy_local, so the three cannot drift. The web
-  export ("Download results") gives only start, end and type; the Table view
-  matches the local output, and that is what the adapter expects.
+================================================================================
+2. FIGURE LABELS
+================================================================================
 
-  New: parse_amylogram (11th tool, per-residue projection, not for the
-  manuscript). Fixed: parse_amyloid_predict.
+  src/amyloscope/io/metadata.py   (new)
+  src/amyloscope/config.py        labels: section, applied at load
 
-io/adapters.py -- AmyloDeep (opt-in), and analysis/independence.py -- mechanism
-families
+ProteinSpec.display_name is already the single place a figure's axis label comes
+from, and for a handful of proteins the config carries the names directly. For a
+sweep that does not work: 372 accessions cannot be hand-named, and an axis of
+accessions makes the reader do a lookup for every row. So a metadata table
+supplies them -- one row per protein, an `id` column matching the protein ids,
+and the label built as a template over the table's other columns.
 
-  AmyloDeep (Davtyan et al., 2025, bioRxiv 2025.09.16.676495) gets an adapter so
-  a protein-language-model predictor can be scored, compared and attributed
-  alongside the panel. It stays opt-in upstream: registering an adapter makes a
-  tool available, the config decides whether it votes, and for a fractional
-  consensus that distinction is the whole point -- adding one voter moves every
-  tier beneath it.
+  labels:
+    table: meta.tsv              # relative to the config file
+    template: "{tax_name} {group}"
+    id_column: id
+    require_all: false
 
-  The model scores WINDOWS, not residues, and a window score taken at face value
-  is a silent corruption twice over: a 0-based window START read as a residue
-  index costs a one-residue N-terminal shift against every other tool, and the
-  window score itself mislocates a region by about half a window. The projection
-  is done upstream, and this adapter REFUSES a window table rather than accept
-  one, naming the consequence. With a 10-residue window a `max` projection can
-  exceed the evidence by up to 9 residues -- nearly twice AmyloGram's 5, and the
-  same family of artefact as Cross-Beta's 15 -- so its breadth belongs in the
-  cluster analysis before it is allowed to move a tier.
+This is a choice, not a formatting detail, so the policy is written down:
 
-  Three table shapes reach the adapter and two may pass: AmyloDeep 0.4's residue
-  table (`residue_number`, 1-based, written by default), its window table
-  (`window_start_0based`, what 0.3 emitted, written under --resolution window),
-  and aggressor-wrappers' own `Number, Residue, Score` projection. The refusal
-  identifies a window table by its marker column where the header carries one and
-  by row count otherwise. The row count alone is not sufficient: at window_size 1
-  there is one window per residue, so the count matches and only the column name
-  betrays the grain.
+  1. LABEL BY MEANING. Default "{tax_name} {group}" -- what a reader of a
+     comparative figure is actually comparing.
 
-  window_size and aggregate are read from the file rather than assumed, because
-  the CLI default moved (0.3: 10, 0.4: 6) and the two rules place a boundary
-  differently -- a table's provenance is what decides how far its shoulders can be
-  trusted. Where the source table carries them, coverage_depth,
-  window_min/mean/max/support/std, window_at_start and heads_used are carried
-  through as well. The consensus reads only Score, but the spread is what
-  distinguishes a residue at 0.35 whose covering windows ran 0.05 to 0.95 -- a
-  boundary residue -- from one every window agreed was mid-range, and heads_used
-  flags a run that dropped the XGBoost head and averaged four.
+  2. FALL BACK DOWN A CHAIN so a partly resolved table still labels every row:
+     the full template, then species, then group, then the bare id. A row with
+     no metadata gets its accession, never a blank or a guess.
 
-  independence.py gains MECHANISM_FAMILIES, because derivation and composition
-  are different questions. Derivation asks whether a vote is duplicated;
-  composition asks how many genuinely different ways of reading a sequence the
-  panel contains. On the ribosomal panel plus AmyloDeep: 4 biophysical, 2 shallow
-  ML, and one each of matrix, structural, deep CNN and pLM. Four families rest on
-  a single tool, which the report now says explicitly -- agreement between a
-  solitary family and the rest is evidence from a different direction and worth
-  more than one vote, while its disagreement is not outvoted so much as
-  outnumbered. Families do NOT reduce effective_panel_size: shared inductive bias
-  is not a duplicated vote, and conflating the two would double-count the
-  correction.
+  3. DISAMBIGUATE COLLISIONS WITH THE ACCESSION, ON EVERY MEMBER OF THE SET. A
+     suffix on one row of a colliding pair reads as a correction applied to that
+     row; on both it reads as a property of the pair, which is what it is. The
+     accession rather than the full id, because inside a colliding set the
+     taxon is identical by construction, so the taxid prefix spends axis width
+     saying the same thing on every member.
 
-viz/clusters.py, viz/per_protein.py  (new)
+     This also makes a wrong template visible rather than misleading. Two FXR1
+     orthologues under "{group}" are both "FXR1", and the axis then comes out
+     ugly in a way that says the template is wrong for this figure -- instead of
+     readable and wrong.
 
-  Core-versus-extent bars, one row per cluster: the extent in the tier the
-  region was called at, the core drawn on top in its own tier colour. Reading
-  the two marks against each other is the point -- the figure exists to stop a
-  narrow high-agreement core and its wider low-agreement surroundings being
-  reported as one homogeneous call. Per-protein small multiples make the
-  Simpson's-paradox case visible: two proteins with opposite positional bias
-  that pool into "no effect".
+  4. THE ID STAYS AUTHORITATIVE. This only ever sets display_name. Every path
+     lookup, join and provenance record still goes through ProteinSpec.id, so a
+     figure becoming readable never costs the ability to say which sequence
+     exactly a row was.
 
-viz/style.py, viz/overlap.py, viz/correlation.py, viz/consensus.py,
-viz/detailed.py, viz/domains.py
+An explicit display_name in the config is never overruled: a name written by
+hand is a deliberate statement, and a table should not silently replace it.
 
-  Type sizes are now width-relative. A journal scales every figure to the same
-  column width, so what a reader compares is point size divided by figure width,
-  and fixing the point size alone makes a label in a 14-inch figure and a
-  24-inch figure render differently on the page. figure_fonts() resolves the
-  scale against each figure's actual width, replacing per-module _fonts()
-  helpers that resolved relative keywords against rcParams -- which rendered an
-  annotation at 17 pt on a poster preset while the label's character count
-  stayed the same, and that is what made labels collide. Tier colours moved to
-  an explicit three-colour list; positional enrichment plots the permutation
-  expectation profile rather than a flat line.
+require_all refuses a partially covered set. Half an axis in species names and
+half in accessions is the one outcome worse than all accessions, so it is
+available as an error rather than something to notice in the figure.
 
-core/consensus.py, core/regions.py, config.py, io/loader.py, cli.py
+Delimiters are taken from the file suffix before sniffing. A .tsv parsed as CSV
+yields a single column named after the whole header line, after which every
+label falls back to the id -- which looks like missing metadata rather than a
+parsing mistake, so it is worth not relying on a sniff.
 
-  ConsensusResult retains raw_regions, so cluster analysis sees pre-merge
-  extents instead of re-deriving them. ToolSpec gained `options`, forwarded to
-  adapters by signature, so a per-tool setting such as amyloid_predict's
-  score_column no longer needs a bespoke adapter. _warn_shared_paths() catches
-  two tools configured to read the same file. _normalise_flag now passes
-  na_action="ignore", so a NaN is not stringified into a truthy value. New
-  `ingest` CLI subcommand.
+On the FXR1 metadata, end to end: 372 labels, all 372 distinguishable, none
+falling back to a bare accession, 52 disambiguated -- those being species that
+contribute several sequences to the same group, e.g. the six Acyrthosiphon pisum
+pre-duplication genes.
 
-pipeline.py, examples/ribosomal/
+The same policy lives in amyloevo.io.annotate, which is what builds these
+tables. amyloscope is the consumer here: it does not resolve taxonomy and will
+not invent a species name the table does not carry. Writing it in both places
+caught a real divergence -- the suffix was the full id here and the accession
+there, differing on 52 of those 372 rows -- so a test in each package now pins
+the two to the same output.
 
-  Clusters and the independence check are wired in and emit apr_clusters.{tsv,
-  txt,png,svg}, predictor_breadth.tsv, predictor_independence.txt and
-  predictor_overlap.tsv. A duplicated plot_positional_enrichment call is
-  removed. The example config gains AmyloGram, flag-based detection for
-  Aggrescan and FoldAmyloid, and viz.detailed.
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+3. THE `aggressor` ADAPTER, AND TWO DEFECTS IN ITS NEIGHBOURS
+================================================================================
 
-Tests
+Every adapter here parses one tool's native export. This one parses the output of
+aggressor-wrappers, and it exists because a config generated by that package named
+`adapter: aggressor` -- which no registry entry provided, so a 372-protein handoff
+could not load at all.
 
-  79 passed. New: test_clusters.py, test_independence.py,
-  test_adapters_amylodeep.py and
-  test_adapters_aggrescan.py -- the last pins NHSA rather than HSA as the
-  hot-spot mask, with Y10 as the discriminating case. The AmyloDeep tests cover
-  both residue-grain shapes, the provenance columns surviving the adapter, a
-  four-head run staying identifiable, and the window_size-1 case where the row
-  count matches but the grain is still wrong.
+io/adapters.py -- parse_aggressor
+
+  The execution layer has already done the per-tool work: it ran the predictor, read
+  whatever shape that tool emits, and binarised it with that tool's own threshold
+  AND direction. PASTA's pairing energy is amyloidogenic when LOW, AGGRESCAN's Hot
+  Spots come from NHSA rather than from the a4v profile, WALTZ cuts on 0-100 while
+  APPNN cuts on 0-1. So what crosses the boundary is the CALL, and the detection
+  strategy for this adapter is `flag` on APR rather than a threshold. None of those
+  rules has to be restated in an amyloscope config, and none of them can drift
+  between the two packages -- which is the point of having an execution layer.
+
+  A track WITHOUT an APR column is refused rather than scored from Score with a
+  generic cut. Two reasons, and the first is quiet: a tool read that way would call
+  nothing where its real calls were negative-scored, so a panel would lose a voter
+  without saying so, and a fractional consensus counts voters -- every tier beneath
+  it moves. The second is that a generic `>=` inverts an inverted-scale tool
+  outright. The error names both the consequence and the command that fixes it.
+
+  Boolean spelling is normalised across the ways a CSV can carry one: pandas writes
+  True/False, a spreadsheet writes TRUE or 1, and a CSV has no booleans at all. A
+  test covers each spelling, because a track whose APR column reads as all-false is
+  indistinguishable from a tool that found nothing.
+
+  A length disagreement between the track and the configured sequence raises with
+  both counts and the likely cause -- a config built from a different FASTA, or a
+  duplicate header whose later record replaced an earlier one of a different length.
+  That was the failure in practice: 793 positions against a 792-residue sequence,
+  surfacing as a KeyError three layers down.
+
+  Provenance is carried where present and required nowhere: window_size and
+  aggregate say how far a boundary can be trusted, coverage_depth marks the termini
+  where a value rests on fewer windows, and heads_used flags an ensemble that ran
+  short of its full complement.
+
+tests/test_adapters_aggressor.py (new)
+
+  13 tests. The ones worth naming: a track whose every Score is 0.1 while APR says
+  16-21, so a generic threshold would call nothing and the test proves the call is
+  read rather than derived; the same for negative PASTA-like scores, which a
+  threshold would invert; and the length mismatch, asserted to name both numbers.
+
+io/adapters.py -- the flag column, under a pandas that does not use `object`
+
+  The boolean normalisation this message promises above was written as
+  `if calls.dtype == object:`, with a numeric branch underneath. pandas 3 infers
+  a `str` dtype for a text column rather than `object`, so under pandas 3 that
+  test is False for an ordinary CSV of yes/no, the numeric branch runs,
+  `to_numeric` coerces every value to NaN, `fillna(0)` makes it zero, and the
+  track reads as a tool that called NOTHING.
+
+  That is the failure this adapter's own docstring says it refuses to allow: a
+  panel quietly missing a voter, with every fractional tier beneath it moved, and
+  no error anywhere. It is also version-dependent, so it would have appeared on
+  one machine and not another -- the parametrised yes/no case in
+  test_adapters_aggressor.py was already failing on pandas 3.0.5 while passing on
+  2.3.3.
+
+  `_truthy()` replaces the dtype test: booleans by `is_bool_dtype`, numbers by
+  `is_numeric_dtype` and `> 0.5`, everything else lowercased and matched against
+  a token set shared with `core.regions._DEFAULT_TRUTHY`, so the two paths agree
+  on what a flag means. Digits stored as text are still read as numbers.
+
+io/adapters.py -- parse_appnn resolved by name
+
+  The last adapter in this module still assigning `df.columns = [...]`
+  positionally, which is the failure the module docstring says was eliminated
+  everywhere else. A file with `score` and `is_hotspot` transposed yields `Score`
+  holding False/True and `is_hotspot` holding 0.15/0.85; `_finalise` coerces the
+  booleans to 0.0/1.0 without complaint, and a config reading
+  `detection: {method: flag, column: is_hotspot}` then matches nothing.
+
+  The hardcoded `sep="\t"` was the other half: this project's own
+  appnn_converter.R writes COMMA-separated output
+  (sequence_name, aminoacid_position, aminoacid, aminoacid_score, hotspot_region),
+  which raised "Length mismatch: Expected axis has 1 elements" -- downgraded by
+  the loader to a warning, so APPNN simply vanished from the panel rather than
+  failing. `_read_table` sniffs the delimiter, as every sibling adapter does, and
+  the columns are picked by name with the R converter's spellings among the
+  aliases.
+
+  Neither affected the FXR1 run, which read its tracks through the `aggressor`
+  adapter rather than this one. Both are live hazards for anyone reading native
+  APPNN output, and the first for anyone on pandas 3.
+
+================================================================================
+4. CLUSTER FIGURES PAGINATED ON THEIR OWN COUNT
+================================================================================
+
+  src/amyloscope/viz/paging.py   cluster_pages()
+  src/amyloscope/pipeline.py     uses it
+  tests/test_paging.py
+
+The cluster figure draws one lane per CLUSTER, and a protein contributes however
+many it has: 372 proteins produced 2,654 lanes and a 334,802-pixel image. The
+first fix paginated the clusters as if the result were a list of them, which
+raised `TypeError: 'ClusterResult' object is not iterable` -- it is a dataclass
+holding a protein -> clusters mapping.
+
+cluster_pages() flattens that mapping, chunks on the cluster count, and regroups
+each page back by protein with dataclasses.replace, so a page is the same type
+with a smaller mapping and plot_cluster_cores needs no change. Per-protein
+grouping survives inside a page, so a page still reads protein by protein.
+
+Paginating by protein instead would have been the obvious alternative and is
+wrong for the same reason the original was: one page would still hold however
+many clusters its proteins happen to carry.
+
+
+================================================================================
+HOUSEKEEPING
+================================================================================
+
+.gitignore   CHANGELOG* and COMMITMESSAGE* are now ignored.
+
+  Note that COMMITMESSAGE.txt is still TRACKED from before that rule -- an
+  ignore rule does not untrack a file, so it will keep showing up in git status
+  and in diffs. `git rm --cached COMMITMESSAGE.txt` finishes the job and leaves
+  the file on disk.
+
+
+================================================================================
+TESTS
+================================================================================
+
+  tests/test_multiple.py          BH against scipy, Holm, monotonicity, NaN
+                                  handling, and the realistic family shape (91
+                                  tests at a p-floor of 0.0625, which must come
+                                  back with zero discoveries)
+  tests/test_termini.py           the two-number report, the sign test, the
+                                  p-floor, and that adjustment never reorders
+  tests/test_metadata_labels.py   the policy above, clause by clause, plus the
+                                  delimiter handling and the config wiring
+  tests/test_adapters_aggressor.py  13 tests; see section 3
+  tests/test_paging.py            cluster pagination on the cluster count
+
+180 tests pass, 1 skipped (the cross-package label check, when amyloevo is not
+importable).
+
+Several assertions in here were wrong before the code was, and were corrected
+rather than loosened: a configurable-template test that expected no collision
+where the policy correctly produces one, a config fixture missing required tool
+keys, and a page_name case that assumed a stem always carries a suffix.
