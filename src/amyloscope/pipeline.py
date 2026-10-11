@@ -62,7 +62,7 @@ def run(config: PipelineConfig, make_figures: bool = True) -> PipelineArtifacts:
     # disagreeing with the text.
     overlap = None
     if any(p.domains for p in config.proteins):
-        overlap = compute_domain_overlap(result)
+        overlap = compute_domain_overlap(result, group_by="name", draws=2000)
         overlap_path = out_dir / "domain_overlap.txt"
         overlap_path.write_text(format_overlap_report(overlap), encoding="utf-8")
         written.append(str(overlap_path))
